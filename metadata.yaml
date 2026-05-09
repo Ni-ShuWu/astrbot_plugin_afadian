@@ -1,6 +1,7 @@
 name: astrbot_plugin_afdian_model
 display_name: 爱发电模型订阅
 version: v1.0.0
-author: 术无
+author: Ni-ShuWu
 description: 基于爱发电赞助的LLM模型自助切换插件
-repo: 术无
+homepage: "https://github.com/Ni-ShuWu/astrbot_plugin_afadian"
+repo: "https://github.com/Ni-ShuWu/astrbot_plugin_afadian"
