@@ -25,31 +25,31 @@
 
 | 命令 | 说明 |
 |------|------|
-| `/afdian addplan <plan_id> <天数> <前缀1,前缀2,...>` | 添加赞助方案映射 |
-| `/afdian delplan <plan_id>` | 删除赞助方案 |
-| `/afdian addadmin <群号> <QQ号>` | 添加群管理员（静态兜底） |
-| `/afdian deladmin <群号> <QQ号>` | 移除群管理员 |
+| `/afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>` | 添加赞助方案映射 |
+| `/afdian_delplan <plan_id>` | 删除赞助方案 |
+| `/afdian_addadmin <群号> <QQ号>` | 添加群管理员（静态兜底） |
+| `/afdian_deladmin <群号> <QQ号>` | 移除群管理员 |
 
 ### 示例
 
 ```
-/afdian addplan plan_gpt4_30d 30 gpt-4o,gpt-4
-/afdian addplan plan_claude_30d 30 claude-3
-/afdian addadmin 123456789 10001
+/afdian_addplan plan_gpt4_30d 30 gpt-4o,gpt-4
+/afdian_addplan plan_claude_30d 30 claude-3
+/afdian_addadmin 123456789 10001
 ```
 
 ## 用户命令（仅私聊）
 
 | 命令 | 说明 |
 |------|------|
-| `/afdian bind <订单号>` | 绑定爱发电订单，获得模型权限 |
-| `/afdian models` | 查看当前可用的模型列表 |
-| `/afdian switch <前缀> <模型名>` | 切换当前使用的模型 |
-| `/afdian status` | 查看剩余天数、当前模型、到期时间 |
+| `/afdian_bind <订单号>` | 绑定爱发电订单，获得模型权限 |
+| `/afdian_models` | 查看当前可用的模型列表 |
+| `/afdian_switch <前缀> <模型名>` | 切换当前使用的模型 |
+| `/afdian_status` | 查看剩余天数、当前模型、到期时间 |
 
 ### 群聊切换模型
 
-群聊中发送 `/afdian switch <前缀> <模型名>`，系统会先验证发送者是否为群主或群管：
+群聊中发送 `/afdian_switch <前缀> <模型名>`，系统会先验证发送者是否为群主或群管：
 - 优先通过平台 API 查询角色（owner/admin）
 - 平台 API 不可用时使用静态管理员列表兜底
 - 非群管直接拒绝

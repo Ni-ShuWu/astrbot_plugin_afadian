@@ -70,7 +70,6 @@ class AfdianModelPlugin(Star):
         super().__init__(context)
         self._api = None
         self._processed_orders = self._load_processed_orders()
-        self._init_api()
 
         asyncio.create_task(self._cron_daily())
         asyncio.create_task(self._cron_poll())
@@ -79,14 +78,14 @@ class AfdianModelPlugin(Star):
             "/api/v1/afdian/webhook", self._handle_webhook, ["POST"], "爱发电Webhook回调"
         )
 
-    def _init_api(self):
-        cfg = self._config()
-        uid = cfg.get("afdian_user_id", "")
-        token = cfg.get("afdian_token", "")
-        if uid and token:
-            self._api = AfdianAPI(uid, token)
-        else:
-            logger.warning("[AfdianModel] 未配置爱发电user_id或token")
+    def _get_api(self):
+        if self._api is None:
+            cfg = self._config()
+            uid = cfg.get("afdian_user_id", "")
+            token = cfg.get("afdian_token", "")
+            if uid and token:
+                self._api = AfdianAPI(uid, token)
+        return self._api
 
     def _config(self) -> dict:
         try:
@@ -262,69 +261,24 @@ class AfdianModelPlugin(Star):
         sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", umo_key)
         return umo_data
 
-    @filter.command("afdian")
-    async def cmd_afdian(self, event: AstrMessageEvent):
-        """爱发电模型订阅插件主命令"""
-        msg = event.message_str.strip()
-        parts = msg.split()
-        if len(parts) < 2:
-            yield event.plain_result(
-                "爱发电模型订阅插件\n"
-                "用户命令（私聊）：\n"
-                "  /afdian bind <订单号> - 绑定订单\n"
-                "  /afdian models - 查看可用模型\n"
-                "  /afdian switch <前缀> <模型名> - 切换模型\n"
-                "  /afdian status - 查看状态\n"
-                "管理员命令：\n"
-                "  /afdian addplan <plan_id> <天数> <前缀列表>\n"
-                "  /afdian delplan <plan_id>\n"
-                "  /afdian addadmin <群号> <QQ号>\n"
-                "  /afdian deladmin <群号> <QQ号>"
-            )
-            return
+    # ==================== 用户命令 ====================
 
-        sub = parts[1]
-
-        if sub == "bind":
-            async for r in self._handle_bind(event, parts):
-                yield r
-        elif sub == "models":
-            async for r in self._handle_models(event):
-                yield r
-        elif sub == "switch":
-            async for r in self._handle_switch(event, parts):
-                yield r
-        elif sub == "status":
-            async for r in self._handle_status(event):
-                yield r
-        elif sub == "addplan":
-            async for r in self._handle_addplan(event, parts):
-                yield r
-        elif sub == "delplan":
-            async for r in self._handle_delplan(event, parts):
-                yield r
-        elif sub == "addadmin":
-            async for r in self._handle_addadmin(event, parts):
-                yield r
-        elif sub == "deladmin":
-            async for r in self._handle_deladmin(event, parts):
-                yield r
-        else:
-            yield event.plain_result(f"未知子命令: {sub}，发送 /afdian 查看帮助")
-
-    async def _handle_bind(self, event: AstrMessageEvent, parts: list):
+    @filter.command("afdian_bind")
+    async def cmd_bind(self, event: AstrMessageEvent):
         """绑定爱发电订单号，获得LLM模型选择权限"""
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
-        if not self._api:
+        api = self._get_api()
+        if not api:
             yield event.plain_result("插件未配置爱发电API，请联系管理员")
             return
+        parts = event.message_str.strip().split()
         if len(parts) < 3:
-            yield event.plain_result("用法: /afdian bind <订单号>")
+            yield event.plain_result("用法: /afdian_bind <订单号>")
             return
         order_no = parts[2]
-        resp = await self._api.query_order(page=1)
+        resp = await api.query_order(page=1)
         if resp.get("ec") != 200:
             yield event.plain_result("查询订单失败，请稍后重试")
             return
@@ -338,7 +292,7 @@ class AfdianModelPlugin(Star):
         total_pages = resp.get("data", {}).get("total_page", 1)
         pg = 2
         while order is None and pg <= total_pages:
-            resp = await self._api.query_order(page=pg)
+            resp = await api.query_order(page=pg)
             if resp.get("ec") != 200:
                 break
             for o in resp.get("data", {}).get("list", []):
@@ -381,14 +335,15 @@ class AfdianModelPlugin(Star):
             f"可用模型：{', '.join(available) if available else '无'}"
         )
 
-    async def _handle_models(self, event: AstrMessageEvent):
+    @filter.command("afdian_models")
+    async def cmd_models(self, event: AstrMessageEvent):
         """查看当前可用的LLM模型列表"""
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
         if not umo_data:
-            yield event.plain_result("你还没有赞助权限，请先通过爱发电赞助后使用 /afdian bind <订单号> 绑定")
+            yield event.plain_result("你还没有赞助权限，请先通过爱发电赞助后使用 /afdian_bind <订单号> 绑定")
             return
         model_list = self._config().get("model_list", [])
         available = []
@@ -399,10 +354,12 @@ class AfdianModelPlugin(Star):
             f"可用模型：{', '.join(available) if available else '无'}\n当前模型：{current}"
         )
 
-    async def _handle_switch(self, event: AstrMessageEvent, parts: list):
+    @filter.command("afdian_switch")
+    async def cmd_switch(self, event: AstrMessageEvent):
         """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
+        parts = event.message_str.strip().split()
         if len(parts) < 4:
-            yield event.plain_result("用法: /afdian switch <前缀> <模型名>")
+            yield event.plain_result("用法: /afdian_switch <前缀> <模型名>")
             return
         prefix = parts[2]
         model_name = parts[3]
@@ -447,7 +404,8 @@ class AfdianModelPlugin(Star):
         sp.put(self._umo_key(umo) + ":current", model_name)
         yield event.plain_result(f"已切换至{model_name}")
 
-    async def _handle_status(self, event: AstrMessageEvent):
+    @filter.command("afdian_status")
+    async def cmd_status(self, event: AstrMessageEvent):
         """查看赞助权限状态：剩余天数、当前模型、到期时间"""
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
@@ -463,13 +421,17 @@ class AfdianModelPlugin(Star):
             f"到期时间：{umo_data.get('expire_time', '未知')}"
         )
 
-    async def _handle_addplan(self, event: AstrMessageEvent, parts: list):
+    # ==================== 管理员命令 ====================
+
+    @filter.command("afdian_addplan")
+    async def cmd_addplan(self, event: AstrMessageEvent):
         """添加赞助方案映射：plan_id -> 天数 + 模型前缀"""
-        if len(parts) < 5:
-            yield event.plain_result("用法: /afdian addplan <plan_id> <天数> <前缀1,前缀2,...>")
-            return
         if not await self._check_admin(event):
             yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) < 5:
+            yield event.plain_result("用法: /afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>")
             return
         plan_id = parts[2]
         try:
@@ -486,13 +448,15 @@ class AfdianModelPlugin(Star):
         sp.put(SP_PLAN_MAPPING, mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
-    async def _handle_delplan(self, event: AstrMessageEvent, parts: list):
+    @filter.command("afdian_delplan")
+    async def cmd_delplan(self, event: AstrMessageEvent):
         """删除赞助方案映射"""
-        if len(parts) != 3:
-            yield event.plain_result("用法: /afdian delplan <plan_id>")
-            return
         if not await self._check_admin(event):
             yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) != 3:
+            yield event.plain_result("用法: /afdian_delplan <plan_id>")
             return
         plan_id = parts[2]
         mapping = self._get_plan_mapping()
@@ -503,13 +467,15 @@ class AfdianModelPlugin(Star):
         else:
             yield event.plain_result("方案不存在")
 
-    async def _handle_addadmin(self, event: AstrMessageEvent, parts: list):
+    @filter.command("afdian_addadmin")
+    async def cmd_addadmin(self, event: AstrMessageEvent):
         """添加群管理员（静态兜底列表）"""
-        if len(parts) != 4:
-            yield event.plain_result("用法: /afdian addadmin <群号> <QQ号>")
-            return
         if not await self._check_admin(event):
             yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) != 4:
+            yield event.plain_result("用法: /afdian_addadmin <群号> <QQ号>")
             return
         group_id = parts[2]
         qq = parts[3]
@@ -521,13 +487,15 @@ class AfdianModelPlugin(Star):
         sp.put(SP_GROUP_ADMINS, admins)
         yield event.plain_result(f"已添加群{group_id}的管理员: {qq}")
 
-    async def _handle_deladmin(self, event: AstrMessageEvent, parts: list):
+    @filter.command("afdian_deladmin")
+    async def cmd_deladmin(self, event: AstrMessageEvent):
         """移除群管理员"""
-        if len(parts) != 4:
-            yield event.plain_result("用法: /afdian deladmin <群号> <QQ号>")
-            return
         if not await self._check_admin(event):
             yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) != 4:
+            yield event.plain_result("用法: /afdian_deladmin <群号> <QQ号>")
             return
         group_id = parts[2]
         qq = parts[3]
@@ -603,13 +571,14 @@ class AfdianModelPlugin(Star):
         await asyncio.sleep(10)
         while True:
             await asyncio.sleep(POLL_INTERVAL)
-            if not self._api:
+            api = self._get_api()
+            if not api:
                 continue
             logger.info("[AfdianModel] 定时轮询开始")
             try:
                 page = 1
                 while True:
-                    resp = await self._api.query_order(page=page)
+                    resp = await api.query_order(page=page)
                     if resp.get("ec") != 200:
                         break
                     data = resp.get("data", {})
