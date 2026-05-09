@@ -265,6 +265,7 @@ class AfdianModelPlugin(Star):
 
     @filter.command("afdian bind")
     async def cmd_bind(self, event: AstrMessageEvent):
+        """绑定爱发电订单号，获得LLM模型选择权限"""
         if event.get_group_id():
             return
         if not self._api:
@@ -334,6 +335,7 @@ class AfdianModelPlugin(Star):
 
     @filter.command("afdian models")
     async def cmd_models(self, event: AstrMessageEvent):
+        """查看当前可用的LLM模型列表"""
         if event.get_group_id():
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
@@ -351,6 +353,7 @@ class AfdianModelPlugin(Star):
 
     @filter.command("afdian switch")
     async def cmd_switch(self, event: AstrMessageEvent):
+        """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
         parts = event.message_str.strip().split()
         if len(parts) < 4:
             yield event.plain_result("用法: /afdian switch <前缀> <模型名>")
@@ -400,6 +403,7 @@ class AfdianModelPlugin(Star):
 
     @filter.command("afdian status")
     async def cmd_status(self, event: AstrMessageEvent):
+        """查看赞助权限状态：剩余天数、当前模型、到期时间"""
         if event.get_group_id():
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
@@ -416,6 +420,7 @@ class AfdianModelPlugin(Star):
     @filter.command("afdian addplan")
     @filter.permission_type(PermissionType.ADMIN)
     async def cmd_addplan(self, event: AstrMessageEvent):
+        """添加赞助方案映射：plan_id -> 天数 + 模型前缀"""
         parts = event.message_str.strip().split()
         if len(parts) < 5:
             yield event.plain_result("用法: /afdian addplan <plan_id> <天数> <前缀1,前缀2,...>")
@@ -438,6 +443,7 @@ class AfdianModelPlugin(Star):
     @filter.command("afdian addadmin")
     @filter.permission_type(PermissionType.ADMIN)
     async def cmd_addadmin(self, event: AstrMessageEvent):
+        """添加群管理员（静态兜底列表）"""
         parts = event.message_str.strip().split()
         if len(parts) != 4:
             yield event.plain_result("用法: /afdian addadmin <群号> <QQ号>")
@@ -455,6 +461,7 @@ class AfdianModelPlugin(Star):
     @filter.command("afdian delplan")
     @filter.permission_type(PermissionType.ADMIN)
     async def cmd_delplan(self, event: AstrMessageEvent):
+        """删除赞助方案映射"""
         parts = event.message_str.strip().split()
         if len(parts) != 3:
             yield event.plain_result("用法: /afdian delplan <plan_id>")
@@ -471,6 +478,7 @@ class AfdianModelPlugin(Star):
     @filter.command("afdian deladmin")
     @filter.permission_type(PermissionType.ADMIN)
     async def cmd_deladmin(self, event: AstrMessageEvent):
+        """移除群管理员"""
         parts = event.message_str.strip().split()
         if len(parts) != 4:
             yield event.plain_result("用法: /afdian deladmin <群号> <QQ号>")
