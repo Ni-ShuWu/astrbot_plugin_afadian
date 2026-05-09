@@ -12,7 +12,6 @@ from Crypto.Signature import pkcs1_15
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.event.filter import PermissionType
 from astrbot.api.star import Context, Star
 from astrbot.core import sp
 from astrbot.core.provider.entities import ProviderType
@@ -263,15 +262,64 @@ class AfdianModelPlugin(Star):
         sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", umo_key)
         return umo_data
 
-    @filter.command("afdian bind")
-    async def cmd_bind(self, event: AstrMessageEvent):
+    @filter.command("afdian")
+    async def cmd_afdian(self, event: AstrMessageEvent):
+        """爱发电模型订阅插件主命令"""
+        msg = event.message_str.strip()
+        parts = msg.split()
+        if len(parts) < 2:
+            yield event.plain_result(
+                "爱发电模型订阅插件\n"
+                "用户命令（私聊）：\n"
+                "  /afdian bind <订单号> - 绑定订单\n"
+                "  /afdian models - 查看可用模型\n"
+                "  /afdian switch <前缀> <模型名> - 切换模型\n"
+                "  /afdian status - 查看状态\n"
+                "管理员命令：\n"
+                "  /afdian addplan <plan_id> <天数> <前缀列表>\n"
+                "  /afdian delplan <plan_id>\n"
+                "  /afdian addadmin <群号> <QQ号>\n"
+                "  /afdian deladmin <群号> <QQ号>"
+            )
+            return
+
+        sub = parts[1]
+
+        if sub == "bind":
+            async for r in self._handle_bind(event, parts):
+                yield r
+        elif sub == "models":
+            async for r in self._handle_models(event):
+                yield r
+        elif sub == "switch":
+            async for r in self._handle_switch(event, parts):
+                yield r
+        elif sub == "status":
+            async for r in self._handle_status(event):
+                yield r
+        elif sub == "addplan":
+            async for r in self._handle_addplan(event, parts):
+                yield r
+        elif sub == "delplan":
+            async for r in self._handle_delplan(event, parts):
+                yield r
+        elif sub == "addadmin":
+            async for r in self._handle_addadmin(event, parts):
+                yield r
+        elif sub == "deladmin":
+            async for r in self._handle_deladmin(event, parts):
+                yield r
+        else:
+            yield event.plain_result(f"未知子命令: {sub}，发送 /afdian 查看帮助")
+
+    async def _handle_bind(self, event: AstrMessageEvent, parts: list):
         """绑定爱发电订单号，获得LLM模型选择权限"""
         if event.get_group_id():
+            yield event.plain_result("请在私聊中使用此命令")
             return
         if not self._api:
             yield event.plain_result("插件未配置爱发电API，请联系管理员")
             return
-        parts = event.message_str.strip().split()
         if len(parts) < 3:
             yield event.plain_result("用法: /afdian bind <订单号>")
             return
@@ -333,10 +381,10 @@ class AfdianModelPlugin(Star):
             f"可用模型：{', '.join(available) if available else '无'}"
         )
 
-    @filter.command("afdian models")
-    async def cmd_models(self, event: AstrMessageEvent):
+    async def _handle_models(self, event: AstrMessageEvent):
         """查看当前可用的LLM模型列表"""
         if event.get_group_id():
+            yield event.plain_result("请在私聊中使用此命令")
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
         if not umo_data:
@@ -351,10 +399,8 @@ class AfdianModelPlugin(Star):
             f"可用模型：{', '.join(available) if available else '无'}\n当前模型：{current}"
         )
 
-    @filter.command("afdian switch")
-    async def cmd_switch(self, event: AstrMessageEvent):
+    async def _handle_switch(self, event: AstrMessageEvent, parts: list):
         """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
-        parts = event.message_str.strip().split()
         if len(parts) < 4:
             yield event.plain_result("用法: /afdian switch <前缀> <模型名>")
             return
@@ -401,10 +447,10 @@ class AfdianModelPlugin(Star):
         sp.put(self._umo_key(umo) + ":current", model_name)
         yield event.plain_result(f"已切换至{model_name}")
 
-    @filter.command("afdian status")
-    async def cmd_status(self, event: AstrMessageEvent):
+    async def _handle_status(self, event: AstrMessageEvent):
         """查看赞助权限状态：剩余天数、当前模型、到期时间"""
         if event.get_group_id():
+            yield event.plain_result("请在私聊中使用此命令")
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
         if not umo_data:
@@ -417,13 +463,13 @@ class AfdianModelPlugin(Star):
             f"到期时间：{umo_data.get('expire_time', '未知')}"
         )
 
-    @filter.command("afdian addplan")
-    @filter.permission_type(PermissionType.ADMIN)
-    async def cmd_addplan(self, event: AstrMessageEvent):
+    async def _handle_addplan(self, event: AstrMessageEvent, parts: list):
         """添加赞助方案映射：plan_id -> 天数 + 模型前缀"""
-        parts = event.message_str.strip().split()
         if len(parts) < 5:
             yield event.plain_result("用法: /afdian addplan <plan_id> <天数> <前缀1,前缀2,...>")
+            return
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
             return
         plan_id = parts[2]
         try:
@@ -440,13 +486,30 @@ class AfdianModelPlugin(Star):
         sp.put(SP_PLAN_MAPPING, mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
-    @filter.command("afdian addadmin")
-    @filter.permission_type(PermissionType.ADMIN)
-    async def cmd_addadmin(self, event: AstrMessageEvent):
+    async def _handle_delplan(self, event: AstrMessageEvent, parts: list):
+        """删除赞助方案映射"""
+        if len(parts) != 3:
+            yield event.plain_result("用法: /afdian delplan <plan_id>")
+            return
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        plan_id = parts[2]
+        mapping = self._get_plan_mapping()
+        if plan_id in mapping:
+            del mapping[plan_id]
+            sp.put(SP_PLAN_MAPPING, mapping)
+            yield event.plain_result(f"方案已删除: {plan_id}")
+        else:
+            yield event.plain_result("方案不存在")
+
+    async def _handle_addadmin(self, event: AstrMessageEvent, parts: list):
         """添加群管理员（静态兜底列表）"""
-        parts = event.message_str.strip().split()
         if len(parts) != 4:
             yield event.plain_result("用法: /afdian addadmin <群号> <QQ号>")
+            return
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
             return
         group_id = parts[2]
         qq = parts[3]
@@ -458,30 +521,13 @@ class AfdianModelPlugin(Star):
         sp.put(SP_GROUP_ADMINS, admins)
         yield event.plain_result(f"已添加群{group_id}的管理员: {qq}")
 
-    @filter.command("afdian delplan")
-    @filter.permission_type(PermissionType.ADMIN)
-    async def cmd_delplan(self, event: AstrMessageEvent):
-        """删除赞助方案映射"""
-        parts = event.message_str.strip().split()
-        if len(parts) != 3:
-            yield event.plain_result("用法: /afdian delplan <plan_id>")
-            return
-        plan_id = parts[2]
-        mapping = self._get_plan_mapping()
-        if plan_id in mapping:
-            del mapping[plan_id]
-            sp.put(SP_PLAN_MAPPING, mapping)
-            yield event.plain_result(f"方案已删除: {plan_id}")
-        else:
-            yield event.plain_result("方案不存在")
-
-    @filter.command("afdian deladmin")
-    @filter.permission_type(PermissionType.ADMIN)
-    async def cmd_deladmin(self, event: AstrMessageEvent):
+    async def _handle_deladmin(self, event: AstrMessageEvent, parts: list):
         """移除群管理员"""
-        parts = event.message_str.strip().split()
         if len(parts) != 4:
             yield event.plain_result("用法: /afdian deladmin <群号> <QQ号>")
+            return
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
             return
         group_id = parts[2]
         qq = parts[3]
@@ -494,6 +540,16 @@ class AfdianModelPlugin(Star):
             yield event.plain_result(f"已移除群{group_id}的管理员: {qq}")
         else:
             yield event.plain_result("管理员不存在")
+
+    async def _check_admin(self, event: AstrMessageEvent) -> bool:
+        try:
+            config = getattr(self.context, "astrbot_config", {})
+            if not config:
+                config = getattr(self.context, "_config", {})
+            admins = config.get("admins_id", [])
+            return str(event.get_sender_id()) in admins
+        except Exception:
+            return False
 
     async def _cron_daily(self):
         while True:
