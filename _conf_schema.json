@@ -31,8 +31,7 @@
         "description": "1级方案可用模型（逗号分隔）",
         "type": "string",
         "hint": "如: gpt-4o-mini,gemini-2.5-flash",
-        "default": "",
-        "_special": "select_provider"
+        "default": ""
     },
     "plan_id_2": {
         "description": "2级赞助方案plan_id",
@@ -50,14 +49,12 @@
         "description": "2级方案可用模型（逗号分隔）",
         "type": "string",
         "hint": "如: gpt-4o,claude-3.5-sonnet,gemini-2.5-pro",
-        "default": "",
-        "_special": "select_provider"
+        "default": ""
     },
     "model_list": {
         "description": "全局可用模型名称列表（逗号分隔）",
         "type": "string",
         "hint": "用逗号分隔模型名，如: gpt-4o,claude-3.5-sonnet",
-        "default": "",
-        "_special": "select_provider"
+        "default": ""
     }
 }
