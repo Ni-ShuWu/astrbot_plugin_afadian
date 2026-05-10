@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 import os
 import time
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -15,26 +17,29 @@ SP_PLAN_MAPPING = "afdian_model:plan_mapping"
 SP_GROUP_ADMINS = "afdian_model:group_admins"
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
 SP_UMO_PREFIX = "afdian_model:umo:"
-ORDERS_FILE = "processed_orders.json"
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-ORDERS_PATH = os.path.join(PLUGIN_DIR, ORDERS_FILE)
+DATA_DIR = os.path.join(PLUGIN_DIR, "data")
+ORDERS_PATH = os.path.join(DATA_DIR, "processed_orders.json")
+PLUGIN_LOG_PATH = os.path.join(DATA_DIR, "plugin.log")
 
 
 class AfdianAPI:
-    def __init__(self, user_id: str, token: str, api_base: str):
+    def __init__(self, user_id: str, token: str, api_base: str, log_fn=None):
         from afdiankit import Afdian
         self._user_id = user_id
         self._token = token
         base_url = api_base.replace("/api/open", "")
         self._client = Afdian(base_url=base_url)
+        self._wire = log_fn or logger.info
 
     async def query_order(self, page: int = 1) -> dict:
-        from afdiankit.open.utils import sign
+        import hashlib
         params = {"page": page}
         ts = int(time.time())
         json_params = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
-        sig = sign(self._token, json_params, ts, self._user_id)
+        raw = f"{self._token}params{json_params}ts{ts}user_id{self._user_id}"
+        sig = hashlib.md5(raw.encode()).hexdigest()
         body = {
             "user_id": self._user_id,
             "params": json_params,
@@ -42,7 +47,7 @@ class AfdianAPI:
             "sign": sig,
         }
         try:
-            logger.info(f"[AfdianModel] API请求: query-order page={page}")
+            self._wire(f"[AfdianModel] API请求: query-order page={page}")
             resp = await self._client.arequest(
                 "POST", "/api/open/query-order", json=body
             )
@@ -50,12 +55,12 @@ class AfdianAPI:
             ec = data.get("ec", -1)
             if ec == 200:
                 order_count = len(data.get("data", {}).get("list", []))
-                logger.info(f"[AfdianModel] API响应: query-order page={page} ec=200 orders={order_count}")
+                self._wire(f"[AfdianModel] API响应: query-order page={page} ec=200 orders={order_count}")
             else:
-                logger.warning(f"[AfdianModel] API响应异常: query-order page={page} ec={ec} em={data.get('em', '')}")
+                self._wire(f"[AfdianModel] API响应异常: query-order page={page} ec={ec} em={data.get('em', '')}", "warning")
             return data
         except Exception as e:
-            logger.error(f"[AfdianModel] API请求失败: query-order page={page} - {e}")
+            self._wire(f"[AfdianModel] API请求失败: query-order page={page} - {e}", "error")
             return {"ec": -1, "em": str(e)}
 
 
@@ -63,10 +68,34 @@ class AfdianModelPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         self._api = None
+        self._processed_orders = set()
+        self._init_data_dir()
         self._processed_orders = self._load_processed_orders()
 
         asyncio.create_task(self._cron_daily())
         asyncio.create_task(self._cron_poll())
+
+    def _init_data_dir(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        try:
+            fh = RotatingFileHandler(
+                PLUGIN_LOG_PATH, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                "[%(asctime)s] [%(levelname)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            ))
+            plog = logging.getLogger("afdian_model")
+            plog.addHandler(fh)
+            plog.setLevel(logging.DEBUG)
+            self._plog = plog
+        except Exception:
+            self._plog = logger
+
+    def _wire(self, msg: str, level: str = "info"):
+        getattr(logger, level)(msg)
+        getattr(self._plog, level)(msg)
 
     def _get_api(self):
         if self._api is None:
@@ -75,7 +104,7 @@ class AfdianModelPlugin(Star):
             token = cfg.get("afdian_token", "")
             api_base = cfg.get("afdian_api_base", "https://afdian.net")
             if uid and token:
-                self._api = AfdianAPI(uid, token, api_base)
+                self._api = AfdianAPI(uid, token, api_base, self._wire)
         return self._api
 
     def _config(self) -> dict:
@@ -98,7 +127,7 @@ class AfdianModelPlugin(Star):
             with open(ORDERS_PATH, "w", encoding="utf-8") as f:
                 json.dump(list(self._processed_orders), f)
         except Exception as e:
-            logger.error(f"[AfdianModel] 保存订单记录失败: {e}")
+            self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
     def _get_plan_mapping(self) -> dict:
         return sp.get(SP_PLAN_MAPPING, {})
@@ -130,7 +159,7 @@ class AfdianModelPlugin(Star):
                 if info and info.get("role") in ("owner", "admin"):
                     return True
         except Exception as e:
-            logger.debug(f"[AfdianModel] 平台API获取群角色失败，使用静态列表兜底: {e}")
+            self._wire(f"[AfdianModel] 平台API获取群角色失败，使用静态列表兜底: {e}", "debug")
         group_admins = self._get_group_admins()
         allowed = group_admins.get(str(group_id), [])
         return str(sender_id) in allowed
@@ -158,13 +187,13 @@ class AfdianModelPlugin(Star):
 
         status = order.get("status", 0)
         if status != 2:
-            logger.info(f"[AfdianModel] 订单{out_trade_no}未支付，状态: {status}")
+            self._wire(f"[AfdianModel] 订单{out_trade_no}未支付，状态: {status}")
             return
 
         plan_id = order.get("plan_id", "")
         plan_mapping = self._get_plan_mapping()
         if plan_id not in plan_mapping:
-            logger.info(f"[AfdianModel] 方案{plan_id}未配置，订单{out_trade_no}")
+            self._wire(f"[AfdianModel] 方案{plan_id}未配置，订单{out_trade_no}")
             return
 
         plan = plan_mapping[plan_id]
@@ -183,7 +212,7 @@ class AfdianModelPlugin(Star):
                     datetime.now() + timedelta(days=umo_data["remaining_days"])
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 sp.put(umo_key, umo_data)
-                logger.info(
+                self._wire(
                     f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
                     f"订单{order.get('out_trade_no','')} 下单时间"
                     f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
@@ -287,7 +316,7 @@ class AfdianModelPlugin(Star):
         create_time = order.get("create_time", 0)
         umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
 
-        logger.info(
+        self._wire(
             f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} "
             f"days={umo_data['remaining_days']} order_time={umo_data['order_time']} sender={event.get_sender_id()}"
         )
@@ -361,7 +390,7 @@ class AfdianModelPlugin(Star):
                 model_name, ProviderType.CHAT_COMPLETION, umo
             )
         except Exception as e:
-            logger.warning(f"[AfdianModel] set_provider失败，尝试备用方式: {e}")
+            self._wire(f"[AfdianModel] set_provider失败，尝试备用方式: {e}", "warning")
             try:
                 sp_key = f"curr_provider_{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"
                 sp.put(sp_key, model_name)
@@ -492,14 +521,15 @@ class AfdianModelPlugin(Star):
     async def _cron_daily(self):
         while True:
             await asyncio.sleep(self._seconds_until_next_hour(0))
-            logger.info("[AfdianModel] 每日零点定时任务开始")
             try:
                 active_umos = sp.get(SP_ACTIVE_UMOS, [])
+                total = len(active_umos)
                 if not active_umos:
-                    logger.info("[AfdianModel] 无活跃绑定，跳过")
+                    self._wire("[AfdianModel] Daily OK | Bindings: 0 active, nothing to do")
                     continue
                 now = datetime.now()
                 to_remove = []
+                expired = 0
                 for key in list(active_umos):
                     data = sp.get(key, {})
                     if not data or not isinstance(data, dict):
@@ -511,7 +541,7 @@ class AfdianModelPlugin(Star):
                         continue
                     days -= 1
                     if days <= 0:
-                        logger.info(f"[AfdianModel] UMO{key}权限到期，清除绑定")
+                        self._wire(f"[AfdianModel] UMO{key}权限到期，清除绑定")
                         current_key = key + ":current"
                         default_provider = sp.get("curr_provider", "")
                         if sp.get(current_key) and default_provider:
@@ -525,6 +555,7 @@ class AfdianModelPlugin(Star):
                         sp.put(key, None)
                         sp.put(current_key, None)
                         to_remove.append(key)
+                        expired += 1
                     else:
                         data["remaining_days"] = days
                         data["expire_time"] = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -533,9 +564,13 @@ class AfdianModelPlugin(Star):
                     if key in active_umos:
                         active_umos.remove(key)
                 sp.put(SP_ACTIVE_UMOS, active_umos)
-                logger.info("[AfdianModel] 每日零点定时任务完成")
+                remaining = len(active_umos)
+                self._wire(
+                    f"[AfdianModel] Daily OK | Bindings: {total} -> {remaining} | "
+                    f"Expired: {expired} cleaned"
+                )
             except Exception as e:
-                logger.error(f"[AfdianModel] 每日零点定时任务异常: {e}")
+                self._wire(f"[AfdianModel] 每日零点定时任务异常: {e}", "error")
 
     async def _cron_poll(self):
         await asyncio.sleep(10)
@@ -544,9 +579,10 @@ class AfdianModelPlugin(Star):
             api = self._get_api()
             if not api:
                 continue
-            logger.info("[AfdianModel] 定时轮询开始")
             try:
                 page = 1
+                total_scanned = 0
+                new_orders = 0
                 while True:
                     resp = await api.query_order(page=page)
                     if resp.get("ec") != 200:
@@ -555,6 +591,7 @@ class AfdianModelPlugin(Star):
                     orders = data.get("list", [])
                     if not orders:
                         break
+                    total_scanned += len(orders)
                     newest_found = False
                     for order in orders:
                         out_trade_no = order.get("out_trade_no", "")
@@ -562,20 +599,27 @@ class AfdianModelPlugin(Star):
                             newest_found = True
                             break
                         self._processed_orders.add(out_trade_no)
+                        new_orders += 1
                         self._save_processed_orders()
                         if order.get("status") == 2:
                             plan_id = order.get("plan_id", "")
                             plan_mapping = self._get_plan_mapping()
                             if plan_id in plan_mapping:
-                                logger.info(f"[AfdianModel] 轮询发现新订单: {out_trade_no} plan={plan_id}")
+                                self._wire(f"[AfdianModel] 轮询发现新订单: {out_trade_no} plan={plan_id}")
                             else:
-                                logger.debug(f"[AfdianModel] 轮询订单{out_trade_no} plan={plan_id} 未配置，跳过")
-                    if newest_found or page >= data.get("total_page", 1):
+                                self._wire(f"[AfdianModel] 轮询订单{out_trade_no} plan={plan_id} 未配置，跳过", "debug")
+                    if newest_found:
+                        break
+                    if page >= data.get("total_page", 1):
                         break
                     page += 1
-                logger.info("[AfdianModel] 定时轮询完成")
+                umo_count = len(sp.get(SP_ACTIVE_UMOS, []))
+                self._wire(
+                    f"[AfdianModel] Poll OK | Orders: {new_orders} new / {total_scanned} scanned | "
+                    f"Bindings: {umo_count} active"
+                )
             except Exception as e:
-                logger.error(f"[AfdianModel] 定时轮询异常: {e}")
+                self._wire(f"[AfdianModel] 定时轮询异常: {e}", "error")
 
     @staticmethod
     def _seconds_until_next_hour(hour: int) -> float:
@@ -586,4 +630,4 @@ class AfdianModelPlugin(Star):
         return (target - now).total_seconds()
 
     async def terminate(self):
-        logger.info("[AfdianModel] 插件已卸载")
+        self._wire("[AfdianModel] 插件已卸载")
