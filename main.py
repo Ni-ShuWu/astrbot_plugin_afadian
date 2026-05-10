@@ -551,9 +551,13 @@ class AfdianModelPlugin(Star):
             available.extend(self._match_prefixes(p, model_list))
 
         yield event.plain_result(
-            f"绑定成功，方案：Lv{plan.get('level')}（{plan['days']}天），"
-            f"剩余{umo_data['remaining_days']}天，"
-            f"可用模型：{', '.join(available) if available else '无'}"
+            f"✅ 绑定成功！\n\n"
+            f"📦 方案：Lv{plan.get('level')}（{plan['days']}天）\n"
+            f"⏰ 剩余：{umo_data['remaining_days']}天\n"
+            f"🤖 可用模型：{', '.join(available) if available else '无'}\n\n"
+            f"📋 接下来你可以：\n"
+            f"• 使用 /afdian_models 查看可用模型\n"
+            f"• 使用 /afdian_status 查看赞助状态"
         )
 
     @filter.command("afdian_models")
@@ -573,6 +577,7 @@ class AfdianModelPlugin(Star):
             model_lines.append(f"{i}. {model}")
         result = "**可用模型：**\n" + "\n".join(model_lines) if model_lines else "**可用模型：**\n无"
         result += f"\n\n**当前模型：**{current}"
+        result += f"\n\n💡 提示：使用 /afdian_switch <模型名> 切换模型"
         yield event.plain_result(result)
 
     @filter.command("afdian_switch")
