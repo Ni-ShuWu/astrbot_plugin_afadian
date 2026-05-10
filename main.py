@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core import sp
@@ -65,10 +65,11 @@ class AfdianAPI:
 
 
 class AfdianModelPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self._api = None
         self._processed_orders = set()
+        self._star_config = config or {}
         self._init_data_dir()
         self._processed_orders = self._load_processed_orders()
 
@@ -125,12 +126,22 @@ class AfdianModelPlugin(Star):
 
     def _config(self) -> dict:
         try:
-            cfg = self.context.get_star_config() or {}
-            self._wire(f"[AfdianModel] 配置读取: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "debug")
+            cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
+            if not cfg:
+                cfg = self.context.get_star_config() or {}
+            self._wire(f"[AfdianModel] 配置读取: source={'ctor' if self._star_config else 'context'} keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
             return cfg
         except Exception as e:
             self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
             return {}
+
+    def _get_model_list(self) -> list:
+        raw = self._config().get("model_list", "")
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            return [m.strip() for m in raw.split(",") if m.strip()]
+        return []
 
     def _load_processed_orders(self) -> set:
         try:
@@ -340,7 +351,7 @@ class AfdianModelPlugin(Star):
             f"days={umo_data['remaining_days']} order_time={umo_data['order_time']} sender={event.get_sender_id()}"
         )
 
-        model_list = self._config().get("model_list", [])
+        model_list = self._get_model_list()
         available = []
         for p in umo_data["prefixes"]:
             available.extend(self._match_prefixes(p, model_list))
@@ -361,7 +372,7 @@ class AfdianModelPlugin(Star):
         if not umo_data:
             yield event.plain_result("你还没有赞助权限，请先通过爱发电赞助后使用 /afdian_bind <订单号> 绑定")
             return
-        model_list = self._config().get("model_list", [])
+        model_list = self._get_model_list()
         available = []
         for p in umo_data.get("prefixes", []):
             available.extend(self._match_prefixes(p, model_list))
@@ -398,7 +409,7 @@ class AfdianModelPlugin(Star):
                 yield event.plain_result("无此模型前缀的使用权限")
                 return
 
-        model_list = self._config().get("model_list", [])
+        model_list = self._get_model_list()
         matched = self._match_prefixes(prefix, model_list)
         if model_name not in matched:
             yield event.plain_result(f"模型{model_name}不在可用列表中，可用: {', '.join(matched) if matched else '无'}")
