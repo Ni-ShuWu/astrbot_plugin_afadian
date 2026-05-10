@@ -549,6 +549,7 @@ class AfdianModelPlugin(Star):
             return
         prefix = parts[1]
         model_name = parts[2]
+        full_prefix = f"{prefix}/{model_name}"
         group_id = event.get_group_id()
 
         if group_id:
@@ -564,15 +565,14 @@ class AfdianModelPlugin(Star):
                 yield event.plain_result("无赞助权限，请先绑定")
                 return
             prefixes = umo_data.get("prefixes", [])
-            if prefix not in prefixes:
-                yield event.plain_result("无此模型前缀的使用权限")
+            has_permission = False
+            for p in prefixes:
+                if full_prefix.startswith(p) or p.startswith(full_prefix) or full_prefix == p:
+                    has_permission = True
+                    break
+            if not has_permission:
+                yield event.plain_result(f"无此模型前缀的使用权限\n你的可用前缀: {', '.join(prefixes) if prefixes else '无'}")
                 return
-
-        model_list = self._get_model_list()
-        matched = self._match_prefixes(prefix, model_list)
-        if model_name not in matched:
-            yield event.plain_result(f"模型{model_name}不在可用列表中，可用: {', '.join(matched) if matched else '无'}")
-            return
 
         try:
             self.context.provider_manager.set_provider(
