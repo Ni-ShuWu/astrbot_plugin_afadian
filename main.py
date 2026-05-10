@@ -153,7 +153,10 @@ class AfdianModelPlugin(Star):
             return {}
 
     def _get_model_list(self) -> list:
-        return self._parse_models(self._config().get("model_list", ""))
+        model_list_raw = self._config().get("model_list", "")
+        model_list = self._parse_models(model_list_raw)
+        self._wire(f"[AfdianModel] _get_model_list: raw='{model_list_raw}' parsed={model_list}", "info")
+        return model_list
 
     def _parse_models(self, raw) -> list:
         if isinstance(raw, list):
@@ -479,14 +482,21 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("请在私聊中使用此命令")
             return
         umo_data = self._get_umo_data(event.unified_msg_origin)
+        self._wire(f"[AfdianModel] cmd_models: umo_data={umo_data}", "info")
         if not umo_data:
             yield event.plain_result("你还没有赞助权限，请先通过爱发电赞助后使用 /afdian_bind <订单号> 绑定")
             return
         model_list = self._get_model_list()
+        self._wire(f"[AfdianModel] cmd_models: model_list={model_list}", "info")
         available = []
-        for p in umo_data.get("prefixes", []):
-            available.extend(self._match_prefixes(p, model_list))
+        prefixes = umo_data.get("prefixes", [])
+        self._wire(f"[AfdianModel] cmd_models: user prefixes={prefixes}", "info")
+        for p in prefixes:
+            matched = self._match_prefixes(p, model_list)
+            self._wire(f"[AfdianModel] cmd_models: prefix '{p}' matched={matched}", "info")
+            available.extend(matched)
         current = sp.get(self._umo_key(event.unified_msg_origin) + ":current", "默认模型")
+        self._wire(f"[AfdianModel] cmd_models: available={available}", "info")
         yield event.plain_result(
             f"可用模型：{', '.join(available) if available else '无'}\n当前模型：{current}"
         )
