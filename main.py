@@ -421,7 +421,7 @@ class AfdianModelPlugin(Star):
                     f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
                 )
 
-    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0, order_no: str = ""):
+    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0):
         days = plan["days"]
         prefixes = plan["prefixes"]
         existing = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
@@ -435,37 +435,20 @@ class AfdianModelPlugin(Star):
                                 "prefixes": old_data.get("prefixes", ""),
                                 "expire_time": old_data.get("expire_time", ""),
                                 "plan_id": old_data.get("plan_id", ""),
-                                "order_time": old_data.get("order_time", ""),
-                                "used_orders": old_data.get("used_orders", [])}
+                                "order_time": old_data.get("order_time", "")}
                 self._set_umo_data(umo, new_data)
                 sp.put(existing, None)
                 self._unregister_umo(existing)
         umo_data = self._get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
-        
-        # 检查订单是否已经在用户数据中
         if umo_data:
-            used_orders = umo_data.get("used_orders", [])
-            if order_no and order_no in used_orders:
-                self._wire(f"[AfdianModel] 订单{order_no}已在用户数据中，跳过绑定")
-                return umo_data
-            
-            # 累加时间
             umo_data["remaining_days"] += days
             # 合并 prefixes 并去重
             existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
             combined_prefixes = list(set(existing_prefixes + prefixes))
             umo_data["prefixes"] = self._list_to_str(combined_prefixes)
         else:
-            umo_data = {"remaining_days": days, "prefixes": self._list_to_str(prefixes), "plan_id": plan_id, "used_orders": []}
-        
-        # 记录已使用的订单
-        if order_no:
-            used_orders = umo_data.get("used_orders", [])
-            if order_no not in used_orders:
-                used_orders.append(order_no)
-                umo_data["used_orders"] = used_orders
-        
+            umo_data = {"remaining_days": days, "prefixes": self._list_to_str(prefixes), "plan_id": plan_id}
         umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -615,14 +598,17 @@ class AfdianModelPlugin(Star):
                 return
 
         try:
-            self.context.provider_manager.set_provider(
+            await self.context.provider_manager.set_provider(
                 model_name, ProviderType.CHAT_COMPLETION, umo
             )
         except Exception as e:
-            self._wire(f"[AfdianModel] set_provider失败，尝试备用方式: {e}", "warning")
+            self._wire(f"[AfdianModel] set_provider失败，尝试直写sp.session_put: {e}", "warning")
             try:
-                sp_key = f"curr_provider_{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"
-                sp.put(sp_key, model_name)
+                await sp.session_put(
+                    umo,
+                    "provider_perf_chat_completion",
+                    model_name,
+                )
             except Exception as e2:
                 yield event.plain_result(f"切换模型失败: {e2}")
                 return
@@ -1003,9 +989,16 @@ class AfdianModelPlugin(Star):
                         if sp.get(current_key) and default_provider:
                             try:
                                 umo = json.loads(key.replace(SP_UMO_PREFIX, ""))
-                                self.context.provider_manager.set_provider(
-                                    default_provider, ProviderType.CHAT_COMPLETION, umo
-                                )
+                                try:
+                                    await self.context.provider_manager.set_provider(
+                                        default_provider, ProviderType.CHAT_COMPLETION, umo
+                                    )
+                                except Exception:
+                                    await sp.session_put(
+                                        umo,
+                                        "provider_perf_chat_completion",
+                                        default_provider,
+                                    )
                             except Exception:
                                 pass
                         sp.put(key, None)
