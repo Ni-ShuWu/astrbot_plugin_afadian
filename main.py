@@ -100,38 +100,39 @@ class AfdianModelPlugin(Star):
         getattr(self._plog, level)(msg)
 
     def _get_api(self):
-        if self._api is None:
-            cfg = self._config()
-            uid = cfg.get("afdian_user_id", "")
-            token = cfg.get("afdian_token", "")
-            api_base = cfg.get("afdian_api_base", "https://afdian.net")
+        cfg = self._config()
+        uid = cfg.get("afdian_user_id", "")
+        token = cfg.get("afdian_token", "")
+        api_base = cfg.get("afdian_api_base", "https://afdian.net")
+        self._wire(
+            f"[AfdianModel] API配置检查: user_id={'***' if uid else 'EMPTY'} "
+            f"token={'***' if token else 'EMPTY'} base={api_base}",
+            "info"
+        )
+        if not uid or not token:
             self._wire(
-                f"[AfdianModel] API配置检查: user_id={'***' if uid else 'EMPTY'} "
-                f"token={'***' if token else 'EMPTY'} base={api_base}",
-                "info"
+                f"[AfdianModel] API未配置: user_id={'***' if uid else 'EMPTY'} "
+                f"token={'***' if token else 'EMPTY'}",
+                "warning"
             )
-            if not uid or not token:
-                self._wire(
-                    f"[AfdianModel] API未配置: user_id={'***' if uid else 'EMPTY'} "
-                    f"token={'***' if token else 'EMPTY'}",
-                    "warning"
-                )
-                return None
-            try:
-                self._api = AfdianAPI(uid, token, api_base, self._wire)
-                self._wire("[AfdianModel] API初始化成功")
-            except Exception as e:
-                self._wire(f"[AfdianModel] API初始化失败: {e}", "error")
-                return None
+            return None
+        try:
+            # 每次都重新创建 API 实例，确保使用最新配置
+            self._api = AfdianAPI(uid, token, api_base, self._wire)
+            self._wire("[AfdianModel] API初始化成功")
+        except Exception as e:
+            self._wire(f"[AfdianModel] API初始化失败: {e}", "error")
+            return None
         return self._api
 
     def _config(self) -> dict:
         try:
-            cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
-            if not cfg:
-                cfg = self.context.get_star_config() or {}
-            self._wire(f"[AfdianModel] 配置读取: source={'ctor' if self._star_config else 'context'} keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
-            return cfg
+            # 优先使用 context 获取最新配置
+            cfg = self.context.get_star_config()
+            if cfg is None:
+                cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
+            self._wire(f"[AfdianModel] 配置读取: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
+            return cfg if cfg else {}
         except Exception as e:
             self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
             return {}
