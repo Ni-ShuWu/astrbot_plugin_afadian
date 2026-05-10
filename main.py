@@ -460,6 +460,36 @@ class AfdianModelPlugin(Star):
 
     # ==================== 用户命令 ====================
 
+    @filter.command("afdian_help")
+    async def cmd_help(self, event: AstrMessageEvent):
+        """显示爱发电插件所有可用指令"""
+        help_text = """**🤖 爱发电赞助插件 - 使用指南**
+
+**📌 用户指令：**
+• `/afdian_bind <订单号>` - 绑定爱发电订单号，获得模型使用权限
+• `/afdian_models` - 查看当前可用的模型列表
+• `/afdian_switch <模型名>` - 切换当前使用的模型
+• `/afdian_status` - 查看赞助权限状态（剩余天数、到期时间等）
+• `/afdian_help` - 显示本帮助信息
+
+**🔧 管理员指令：**
+• `/afdian_reset <订单号>` - 释放指定订单的绑定状态
+• `/afdian_query <订单号>` - 查询指定订单详情
+• `/afdian_addplan <plan_id> <天数> <前缀>` - 添加赞助方案
+• `/afdian_delplan <plan_id>` - 删除赞助方案
+• `/afdian_addadmin <群号> <QQ号>` - 添加群管理员
+• `/afdian_deladmin <群号> <QQ号>` - 删除群管理员
+• `/afdian_getconfig` - 查看当前插件配置
+• `/afdian_setconfig <key> <value>` - 设置插件配置
+• `/afdian_migrateconfig` - 从 AstrBot 配置迁移
+
+**📋 使用流程：**
+1. 在爱发电赞助并获取订单号
+2. 使用 `/afdian_bind <订单号>` 绑定
+3. 使用 `/afdian_models` 查看可用模型
+4. 使用 `/afdian_switch <模型名>` 切换模型"""
+        yield event.plain_result(help_text)
+
     @filter.command("afdian_bind")
     async def cmd_bind(self, event: AstrMessageEvent):
         """绑定爱发电订单号，获得LLM模型选择权限"""
@@ -521,7 +551,7 @@ class AfdianModelPlugin(Star):
 
         umo = event.unified_msg_origin
         create_time = order.get("create_time", 0)
-        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time, order_no)
+        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
 
         self._wire(
             f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} level={plan.get('level')} "
