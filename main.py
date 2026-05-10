@@ -128,9 +128,25 @@ class AfdianModelPlugin(Star):
 
     def _config(self) -> dict:
         try:
-            # 直接使用初始化时传入的配置
+            # 尝试多种路径查找配置文件
+            possible_paths = [
+                # AstrBot 标准配置路径
+                os.path.join(os.path.dirname(DATA_DIR), "config", "astrbot_plugin_afdian_model_config.json"),
+                # 备用路径
+                os.path.join(DATA_DIR, "config", "astrbot_plugin_afdian_model_config.json"),
+            ]
+            
+            for config_path in possible_paths:
+                if os.path.exists(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        if cfg:
+                            self._wire(f"[AfdianModel] 从配置文件读取: path={config_path} keys={list(cfg.keys())}", "info")
+                            return cfg
+            
+            # 如果配置文件不存在，使用初始化时传入的配置
             cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
-            self._wire(f"[AfdianModel] 配置 keys: {list(cfg.keys()) if cfg else 'EMPTY'}", "info")
+            self._wire(f"[AfdianModel] 使用初始化配置: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
             return cfg
         except Exception as e:
             self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
