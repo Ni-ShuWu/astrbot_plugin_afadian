@@ -884,11 +884,28 @@ class AfdianModelPlugin(Star):
         cfg[models_key] = self._list_to_str(current_list)
         self._save_plugin_config(cfg)
         
-        self._wire(f"[AfdianModel] 方案{level}添加模型: {model_name}")
+        self._sync_plan_mapping()
+        
+        plan_id = cfg.get(f"plan_id_{level}", "")
+        
+        updated_users = 0
+        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        for umo_key in active_umos:
+            umo_data = sp.get(umo_key, {})
+            if umo_data and umo_data.get("plan_id") == plan_id:
+                existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
+                if model_name not in existing_prefixes:
+                    existing_prefixes.append(model_name)
+                    umo_data["prefixes"] = self._list_to_str(existing_prefixes)
+                    sp.put(umo_key, umo_data)
+                    updated_users += 1
+        
+        self._wire(f"[AfdianModel] 方案{level}添加模型: {model_name}, 更新了 {updated_users} 个用户")
         yield event.plain_result(
             f"✅ 已将模型添加到方案{level}：\n\n"
             f"**{model_name}**\n\n"
-            f"方案{level}当前模型列表：\n" + "\n".join([f"• {m}" for m in current_list])
+            f"方案{level}当前模型列表：\n" + "\n".join([f"• {m}" for m in current_list]) +
+            (f"\n\n已同步到 {updated_users} 个已绑定用户" if updated_users > 0 else "")
         )
 
     @filter.command("afdian_addplan")
