@@ -103,8 +103,19 @@ class AfdianModelPlugin(Star):
             uid = cfg.get("afdian_user_id", "")
             token = cfg.get("afdian_token", "")
             api_base = cfg.get("afdian_api_base", "https://afdian.net")
-            if uid and token:
+            if not uid or not token:
+                self._wire(
+                    f"[AfdianModel] API未配置: user_id={'***' if uid else 'EMPTY'} "
+                    f"token={'***' if token else 'EMPTY'}",
+                    "warning"
+                )
+                return None
+            try:
                 self._api = AfdianAPI(uid, token, api_base, self._wire)
+                self._wire("[AfdianModel] API初始化成功")
+            except Exception as e:
+                self._wire(f"[AfdianModel] API初始化失败: {e}", "error")
+                return None
         return self._api
 
     def _config(self) -> dict:
