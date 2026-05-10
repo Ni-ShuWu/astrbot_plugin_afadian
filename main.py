@@ -421,7 +421,7 @@ class AfdianModelPlugin(Star):
                     f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
                 )
 
-    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0):
+    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0, order_no: str = ""):
         days = plan["days"]
         prefixes = plan["prefixes"]
         existing = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
@@ -435,20 +435,37 @@ class AfdianModelPlugin(Star):
                                 "prefixes": old_data.get("prefixes", ""),
                                 "expire_time": old_data.get("expire_time", ""),
                                 "plan_id": old_data.get("plan_id", ""),
-                                "order_time": old_data.get("order_time", "")}
+                                "order_time": old_data.get("order_time", ""),
+                                "used_orders": old_data.get("used_orders", [])}
                 self._set_umo_data(umo, new_data)
                 sp.put(existing, None)
                 self._unregister_umo(existing)
         umo_data = self._get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
+        
+        # 检查订单是否已经在用户数据中
         if umo_data:
+            used_orders = umo_data.get("used_orders", [])
+            if order_no and order_no in used_orders:
+                self._wire(f"[AfdianModel] 订单{order_no}已在用户数据中，跳过绑定")
+                return umo_data
+            
+            # 累加时间
             umo_data["remaining_days"] += days
             # 合并 prefixes 并去重
             existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
             combined_prefixes = list(set(existing_prefixes + prefixes))
             umo_data["prefixes"] = self._list_to_str(combined_prefixes)
         else:
-            umo_data = {"remaining_days": days, "prefixes": self._list_to_str(prefixes), "plan_id": plan_id}
+            umo_data = {"remaining_days": days, "prefixes": self._list_to_str(prefixes), "plan_id": plan_id, "used_orders": []}
+        
+        # 记录已使用的订单
+        if order_no:
+            used_orders = umo_data.get("used_orders", [])
+            if order_no not in used_orders:
+                used_orders.append(order_no)
+                umo_data["used_orders"] = used_orders
+        
         umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -546,12 +563,34 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("方案未配置，请联系管理员")
             return
 
+        # 再次检查订单是否已被处理（双重保险）
+        if order_no in self._processed_orders:
+            self._wire(f"[AfdianModel] 订单{order_no}已在处理列表中，跳过绑定")
+            yield event.plain_result("该订单已被使用")
+            return
+
         self._processed_orders.add(order_no)
         self._save_processed_orders()
 
         umo = event.unified_msg_origin
         create_time = order.get("create_time", 0)
-        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
+        
+        # 检查用户是否已经有这个订单
+        user_id = order.get("user_id", "")
+        existing_umo_key = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        if existing_umo_key:
+            existing_data = sp.get(existing_umo_key, {})
+            if existing_data:
+                used_orders = existing_data.get("used_orders", [])
+                if order_no in used_orders:
+                    # 订单已在用户数据中，回滚processed_orders
+                    self._processed_orders.discard(order_no)
+                    self._save_processed_orders()
+                    self._wire(f"[AfdianModel] 订单{order_no}已在用户数据中，跳过")
+                    yield event.plain_result("该订单已被使用")
+                    return
+        
+        umo_data = await self._bind_user(user_id, plan_id, plan, umo, create_time, order_no)
 
         self._wire(
             f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} level={plan.get('level')} "
