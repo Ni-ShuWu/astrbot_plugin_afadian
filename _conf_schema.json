@@ -15,8 +15,44 @@
         "type": "string",
         "hint": "在爱发电开发者后台获取，注意保密"
     },
+    "plan_id_1": {
+        "description": "1级赞助方案plan_id",
+        "type": "string",
+        "hint": "爱发电后台的方案ID，留空则不启用",
+        "default": ""
+    },
+    "days_1": {
+        "description": "1级方案有效天数",
+        "type": "int",
+        "hint": "每次赞助增加的天数",
+        "default": 30
+    },
+    "models_1": {
+        "description": "1级方案可用模型（逗号分隔）",
+        "type": "string",
+        "hint": "如: gpt-4o-mini,gemini-2.5-flash",
+        "default": ""
+    },
+    "plan_id_2": {
+        "description": "2级赞助方案plan_id",
+        "type": "string",
+        "hint": "爱发电后台的方案ID，留空则不启用",
+        "default": ""
+    },
+    "days_2": {
+        "description": "2级方案有效天数",
+        "type": "int",
+        "hint": "每次赞助增加的天数",
+        "default": 365
+    },
+    "models_2": {
+        "description": "2级方案可用模型（逗号分隔）",
+        "type": "string",
+        "hint": "如: gpt-4o,claude-3.5-sonnet,gemini-2.5-pro",
+        "default": ""
+    },
     "model_list": {
-        "description": "模型名称列表（逗号分隔）",
+        "description": "全局可用模型名称列表（逗号分隔）",
         "type": "string",
         "hint": "用逗号分隔模型名，如: gpt-4o,claude-3.5-sonnet",
         "default": ""

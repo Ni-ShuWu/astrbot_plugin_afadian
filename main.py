@@ -72,6 +72,7 @@ class AfdianModelPlugin(Star):
         self._star_config = config or {}
         self._init_data_dir()
         self._processed_orders = self._load_processed_orders()
+        self._sync_plan_mapping()
 
         asyncio.create_task(self._cron_daily())
         asyncio.create_task(self._cron_poll())
@@ -142,6 +143,24 @@ class AfdianModelPlugin(Star):
         if isinstance(raw, str) and raw.strip():
             return [m.strip() for m in raw.split(",") if m.strip()]
         return []
+
+    def _sync_plan_mapping(self):
+        existing = self._get_plan_mapping()
+        updated = False
+        for level in ("1", "2"):
+            plan_id = self._config().get(f"plan_id_{level}", "").strip()
+            models_str = self._config().get(f"models_{level}", "").strip()
+            if not plan_id or not models_str:
+                continue
+            days = self._config().get(f"days_{level}", 30 if level == "1" else 365)
+            prefixes = [m.strip() for m in models_str.split(",") if m.strip()]
+            if not prefixes:
+                continue
+            existing[plan_id] = {"days": days, "prefixes": prefixes}
+            updated = True
+            self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
+        if updated:
+            sp.put(SP_PLAN_MAPPING, existing)
 
     def _load_processed_orders(self) -> set:
         try:
