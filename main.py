@@ -491,7 +491,9 @@ class AfdianModelPlugin(Star):
 
 **🔧 管理员指令：**
 • `/afdian_reset <订单号>` - 释放指定订单的绑定状态
+• `/afdian_reset_all YES` - ⚠️ 一键清除所有缓存数据
 • `/afdian_query <订单号>` - 查询指定订单详情
+• `/afdian_addmodels <方案等级> <模型名>` - 向方案添加模型
 • `/afdian_addplan <plan_id> <天数> <前缀>` - 添加赞助方案
 • `/afdian_delplan <plan_id>` - 删除赞助方案
 • `/afdian_addadmin <群号> <QQ号>` - 添加群管理员
@@ -842,6 +844,52 @@ class AfdianModelPlugin(Star):
         )
 
     # ==================== 管理员命令 ====================
+
+    @filter.command("afdian_addmodels")
+    async def cmd_addmodels(self, event: AstrMessageEvent):
+        """向指定方案添加模型：/afdian_addmodels <方案等级> <模型名>"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            yield event.plain_result(
+                "用法: `/afdian_addmodels <方案等级> <模型名>`\n\n"
+                "示例: `/afdian_addmodels 1 openai/gpt-5.4-mini-2026-03-17`\n\n"
+                "方案等级: 1 = 赞助方案1, 2 = 赞助方案2"
+            )
+            return
+        
+        level = parts[1]
+        model_name = parts[2].strip()
+        
+        if level not in ("1", "2"):
+            yield event.plain_result("方案等级只能是 1 或 2")
+            return
+        
+        if not model_name:
+            yield event.plain_result("模型名不能为空")
+            return
+        
+        cfg = self._config()
+        models_key = f"models_{level}"
+        current_models = cfg.get(models_key, "")
+        current_list = self._str_to_list(current_models)
+        
+        if model_name in current_list:
+            yield event.plain_result(f"模型 `{model_name}` 已在方案{level}中，无需重复添加")
+            return
+        
+        current_list.append(model_name)
+        cfg[models_key] = self._list_to_str(current_list)
+        self._save_plugin_config(cfg)
+        
+        self._wire(f"[AfdianModel] 方案{level}添加模型: {model_name}")
+        yield event.plain_result(
+            f"✅ 已将模型添加到方案{level}：\n\n"
+            f"**{model_name}**\n\n"
+            f"方案{level}当前模型列表：\n" + "\n".join([f"• {m}" for m in current_list])
+        )
 
     @filter.command("afdian_addplan")
     async def cmd_addplan(self, event: AstrMessageEvent):
