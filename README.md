@@ -81,5 +81,5 @@
 
 ## 依赖
 
-- `afdiankit`：爱发电 Python SDK（API 签名、类型安全）
+- `aiohttp`：异步 HTTP 请求（直接调用爱发电 API）
 
