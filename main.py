@@ -318,7 +318,19 @@ class AfdianModelPlugin(Star):
         sp.put(self._umo_key(umo), data)
 
     def _match_prefixes(self, prefix: str, model_list: list) -> list:
-        return [m for m in model_list if m.startswith(prefix)]
+        """匹配模型：精确匹配 + 前缀匹配"""
+        matched = []
+        for m in model_list:
+            # 精确匹配
+            if m == prefix:
+                matched.append(m)
+            # 前缀匹配（model 以 prefix 开头）
+            elif m.startswith(prefix):
+                matched.append(m)
+            # 部分匹配（prefix 以 model 开头，即 prefix 更长）
+            elif prefix.startswith(m) and len(m) > 0:
+                matched.append(m)
+        return matched
 
     async def _check_group_admin(self, event: AstrMessageEvent) -> bool:
         group_id = event.get_group_id()
