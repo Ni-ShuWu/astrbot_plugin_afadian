@@ -501,6 +501,71 @@ class AfdianModelPlugin(Star):
             f"到期时间：{umo_data.get('expire_time', '未知')}"
         )
 
+    @filter.command("afdian_reset")
+    async def cmd_reset(self, event: AstrMessageEvent):
+        """释放指定订单的绑定状态，销毁激活信息"""
+        if event.get_group_id():
+            yield event.plain_result("请在私聊中使用此命令")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) < 2:
+            yield event.plain_result("用法: /afdian_reset <订单号>")
+            return
+        order_no = parts[1]
+        
+        # 检查订单是否在已处理列表中
+        if order_no not in self._processed_orders:
+            yield event.plain_result("该订单未绑定，无需重置")
+            return
+        
+        # 查询订单获取用户信息
+        api = self._get_api()
+        if not api:
+            yield event.plain_result("API未配置，无法验证订单")
+            return
+        
+        # 搜索订单
+        found = None
+        pg = 1
+        while True:
+            resp = await api.query_order(page=pg)
+            if resp.get("ec") != 200:
+                break
+            data = resp.get("data", {})
+            orders = data.get("list", [])
+            for o in orders:
+                if o.get("out_trade_no") == order_no:
+                    found = o
+                    break
+            if found:
+                break
+            if pg >= data.get("total_page", 1):
+                break
+            pg += 1
+        
+        if not found:
+            yield event.plain_result("订单不存在或查询失败")
+            return
+        
+        user_id = found.get("user_id", "")
+        
+        # 查找并销毁用户数据
+        umo_key = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        if umo_key:
+            # 销毁用户数据
+            sp.put(umo_key, None)
+            # 从活跃列表移除
+            self._unregister_umo(umo_key)
+            # 删除用户映射
+            sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        
+        # 从已处理订单中移除
+        self._processed_orders.discard(order_no)
+        self._save_processed_orders()
+        
+        self._wire(f"[AfdianModel] 订单重置成功: order={order_no} user={user_id}")
+        yield event.plain_result(f"订单 {order_no} 已重置，绑定信息已销毁，可以重新绑定")
+
     # ==================== 管理员命令 ====================
 
     @filter.command("afdian_addplan")
