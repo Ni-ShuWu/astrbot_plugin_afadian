@@ -536,20 +536,21 @@ class AfdianModelPlugin(Star):
             return
         prefixes = umo_data.get("prefixes", [])
         current = sp.get(self._umo_key(event.unified_msg_origin) + ":current", "默认模型")
-        yield event.plain_result(
-            f"可用模型：{', '.join(prefixes) if prefixes else '无'}\n当前模型：{current}"
-        )
+        model_lines = []
+        for i, model in enumerate(prefixes, 1):
+            model_lines.append(f"{i}. {model}")
+        result = "**可用模型：**\n" + "\n".join(model_lines) if model_lines else "**可用模型：**\n无"
+        result += f"\n\n**当前模型：**{current}"
+        yield event.plain_result(result)
 
     @filter.command("afdian_switch")
     async def cmd_switch(self, event: AstrMessageEvent):
         """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
-        parts = event.message_str.strip().split()
-        if len(parts) < 3:
-            yield event.plain_result("用法: /afdian_switch <前缀> <模型名>")
+        parts = event.message_str.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            yield event.plain_result("用法: /afdian_switch <模型名>\n例如: /afdian_switch openai/gpt-5.4-mini-2026-03-17")
             return
-        prefix = parts[1]
-        model_name = parts[2]
-        full_prefix = f"{prefix}/{model_name}"
+        model_name = parts[1].strip()
         group_id = event.get_group_id()
 
         if group_id:
@@ -567,11 +568,13 @@ class AfdianModelPlugin(Star):
             prefixes = umo_data.get("prefixes", [])
             has_permission = False
             for p in prefixes:
-                if full_prefix.startswith(p) or p.startswith(full_prefix) or full_prefix == p:
+                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
                     has_permission = True
                     break
             if not has_permission:
-                yield event.plain_result(f"无此模型前缀的使用权限\n你的可用前缀: {', '.join(prefixes) if prefixes else '无'}")
+                model_lines = [f"{i}. {m}" for i, m in enumerate(prefixes, 1)]
+                available = "\n".join(model_lines) if model_lines else "无"
+                yield event.plain_result(f"无此模型的使用权限\n\n**可用模型：**\n{available}")
                 return
 
         try:
@@ -588,7 +591,7 @@ class AfdianModelPlugin(Star):
                 return
 
         sp.put(self._umo_key(umo) + ":current", model_name)
-        yield event.plain_result(f"已切换至{model_name}")
+        yield event.plain_result(f"已切换至 {model_name}")
 
     @filter.command("afdian_status")
     async def cmd_status(self, event: AstrMessageEvent):
