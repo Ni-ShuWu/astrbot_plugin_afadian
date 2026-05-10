@@ -784,6 +784,63 @@ class AfdianModelPlugin(Star):
         self._wire(f"[AfdianModel] 订单重置成功: order={order_no} user={user_id}")
         yield event.plain_result(f"订单 {order_no} 已重置，绑定信息已销毁，可以重新绑定")
 
+    @filter.command("afdian_reset_all")
+    async def cmd_reset_all(self, event: AstrMessageEvent):
+        """⚠️ 一键清除所有缓存和持久化数据（除插件配置外），仅管理员可用"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        if event.get_group_id():
+            yield event.plain_result("请在私聊中使用此命令")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) < 2 or parts[1] != "YES":
+            yield event.plain_result(
+                "⚠️ **警告：此操作将清除所有数据！**\n\n"
+                "包括：\n"
+                "• 所有已绑定的订单\n"
+                "• 所有用户的赞助信息\n"
+                "• 所有活跃绑定记录\n"
+                "• 群管理员设置\n\n"
+                "**不会清除**：\n"
+                "• 插件配置文件\n\n"
+                "如需执行，请输入：\n"
+                "`/afdian_reset_all YES`"
+            )
+            return
+        
+        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        for umo_key in active_umos:
+            sp.put(umo_key, None)
+        sp.put(SP_ACTIVE_UMOS, [])
+        
+        all_keys = sp.keys()
+        user_keys = [k for k in all_keys if k.startswith(SP_UMO_PREFIX)]
+        for key in user_keys:
+            sp.put(key, None)
+        
+        sp.put(SP_GROUP_ADMINS, {})
+        
+        self._processed_orders.clear()
+        self._save_processed_orders()
+        
+        try:
+            if os.path.exists(ORDERS_PATH):
+                os.remove(ORDERS_PATH)
+        except Exception:
+            pass
+        
+        self._wire(f"[AfdianModel] 一键重置完成")
+        yield event.plain_result(
+            f"✅ **一键重置完成！**\n\n"
+            f"已清除：\n"
+            f"• {len(active_umos)} 个活跃绑定\n"
+            f"• {len(user_keys)} 个用户数据\n"
+            f"• 群管理员设置\n"
+            f"• 已处理订单记录\n\n"
+            f"插件配置已保留，可正常使用。"
+        )
+
     # ==================== 管理员命令 ====================
 
     @filter.command("afdian_addplan")
