@@ -56,10 +56,11 @@
 
 ## Webhook
 
+- 插件自动启动独立 aiohttp 服务，默认监听端口 **6199**
 - 路由地址：`POST /api/v1/afdian/webhook`
-- 插件启动自动注册，无需手动配置路由
 - 使用 RSA+SHA256 验证爱发电签名
-- 在爱发电开发者后台将 Webhook URL 配置为 `http://<你的服务器>:6185/api/v1/afdian/webhook`
+- 在爱发电开发者后台将 Webhook URL 配置为 `http://<你的服务器IP>:6199/api/v1/afdian/webhook`
+- 端口可在插件配置界面修改
 
 ## 自动任务
 

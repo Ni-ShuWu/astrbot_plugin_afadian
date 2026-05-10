@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
+from aiohttp import web
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
@@ -15,6 +16,7 @@ from astrbot.core import sp
 from astrbot.core.provider.entities import ProviderType
 
 POLL_INTERVAL = 6 * 3600
+WEBHOOK_PORT = 6199
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
 SP_GROUP_ADMINS = "afdian_model:group_admins"
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
@@ -62,13 +64,12 @@ class AfdianModelPlugin(Star):
         super().__init__(context)
         self._api = None
         self._processed_orders = self._load_processed_orders()
+        self._webhook_app = None
+        self._webhook_runner = None
 
         asyncio.create_task(self._cron_daily())
         asyncio.create_task(self._cron_poll())
-
-        context.register_web_api(
-            "/api/v1/afdian/webhook", self._handle_webhook, ["POST"], "爱发电Webhook回调"
-        )
+        asyncio.create_task(self._start_webhook())
 
     def _get_api(self):
         if self._api is None:
@@ -148,28 +149,28 @@ class AfdianModelPlugin(Star):
     def _match_prefixes(self, prefix: str, model_list: list) -> list:
         return [m for m in model_list if m.startswith(prefix)]
 
-    async def _handle_webhook(self, request):
+    async def _handle_webhook(self, request: web.Request):
         cfg = self._config()
         public_key = cfg.get("afdian_public_key", "").strip()
         try:
-            raw_body = await request.get_data()
+            raw_body = await request.read()
             body = json.loads(raw_body)
         except Exception:
-            return {"ec": 400, "em": "Invalid JSON"}
+            return web.json_response({"ec": 400, "em": "Invalid JSON"})
         if public_key:
             signature = request.headers.get("X-Af-Signature", "") or request.headers.get("x-af-signature", "")
             if signature:
                 if not self._verify_rsa(raw_body, signature, public_key):
                     logger.warning("[AfdianModel] Webhook RSA验签失败")
-                    return {"ec": 401, "em": "Signature verification failed"}
+                    return web.json_response({"ec": 401, "em": "Signature verification failed"})
             else:
                 logger.debug("[AfdianModel] Webhook未携带签名头，跳过RSA验证")
         data = body.get("data", {})
         if data.get("type") != "order":
-            return {"ec": 200, "em": ""}
+            return web.json_response({"ec": 200, "em": ""})
         order = data.get("order", {})
         await self._process_single_order(order)
-        return {"ec": 200, "em": ""}
+        return web.json_response({"ec": 200, "em": ""})
 
     def _register_umo(self, umo_key: str):
         active = sp.get(SP_ACTIVE_UMOS, [])
@@ -606,5 +607,25 @@ class AfdianModelPlugin(Star):
             target += timedelta(days=1)
         return (target - now).total_seconds()
 
+    async def _start_webhook(self):
+        try:
+            cfg = self._config()
+            port = cfg.get("webhook_port", WEBHOOK_PORT)
+            self._webhook_app = web.Application()
+            self._webhook_app.router.add_post(
+                "/api/v1/afdian/webhook", self._handle_webhook
+            )
+            runner = web.AppRunner(self._webhook_app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", port)
+            await site.start()
+            self._webhook_runner = runner
+            logger.info(f"[AfdianModel] Webhook服务已启动，端口: {port}")
+            logger.info(f"[AfdianModel] 回调地址: http://<你的IP>:{port}/api/v1/afdian/webhook")
+        except Exception as e:
+            logger.error(f"[AfdianModel] Webhook服务启动失败: {e}")
+
     async def terminate(self):
+        if self._webhook_runner:
+            await self._webhook_runner.cleanup()
         logger.info("[AfdianModel] 插件已卸载")
