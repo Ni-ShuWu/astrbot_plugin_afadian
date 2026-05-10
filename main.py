@@ -22,6 +22,7 @@ PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
 ORDERS_PATH = os.path.join(DATA_DIR, "processed_orders.json")
 PLUGIN_LOG_PATH = os.path.join(DATA_DIR, "plugin.log")
+PLUGIN_CONFIG_PATH = os.path.join(DATA_DIR, "plugin_config.json")
 
 
 class AfdianAPI:
@@ -99,6 +100,31 @@ class AfdianModelPlugin(Star):
     def _wire(self, msg: str, level: str = "info"):
         getattr(logger, level)(msg)
         getattr(self._plog, level)(msg)
+    
+    def _load_plugin_config(self) -> dict:
+        """加载插件自己的配置文件"""
+        try:
+            if os.path.exists(PLUGIN_CONFIG_PATH):
+                with open(PLUGIN_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    # 使用 utf-8-sig 处理 BOM
+                    content = f.read()
+                    if content.startswith('\ufeff'):
+                        content = content[1:]
+                    cfg = json.loads(content)
+                    self._wire(f"[AfdianModel] 插件配置加载成功: {list(cfg.keys())}", "info")
+                    return cfg
+        except Exception as e:
+            self._wire(f"[AfdianModel] 插件配置加载失败: {e}", "error")
+        return {}
+    
+    def _save_plugin_config(self, cfg: dict):
+        """保存插件自己的配置文件"""
+        try:
+            with open(PLUGIN_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            self._wire(f"[AfdianModel] 插件配置保存成功: {list(cfg.keys())}", "info")
+        except Exception as e:
+            self._wire(f"[AfdianModel] 插件配置保存失败: {e}", "error")
 
     def _get_api(self):
         cfg = self._config()
@@ -127,43 +153,36 @@ class AfdianModelPlugin(Star):
         return self._api
 
     def _config(self) -> dict:
+        """获取配置，优先使用插件自己的配置文件"""
         try:
-            # 尝试多种路径查找配置文件
-            plugin_dir = os.path.dirname(DATA_DIR)  # /AstrBot/data/plugins/astrbot_plugin_afdian_model
-            astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))  # /AstrBot/data
-            astrbot_root_dir = os.path.dirname(astrbot_data_dir)  # /AstrBot
+            # 优先加载插件自己的配置
+            plugin_cfg = self._load_plugin_config()
+            if plugin_cfg:
+                return plugin_cfg
             
-            possible_paths = [
-                # AstrBot 标准配置路径（根目录/config）
-                os.path.join(astrbot_root_dir, "config", "astrbot_plugin_afdian_model_config.json"),
-                # AstrBot data/config
-                os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json"),
-                # 尝试不带plugin前缀
-                os.path.join(astrbot_root_dir, "config", "afdian_model_config.json"),
-                os.path.join(astrbot_data_dir, "config", "afdian_model_config.json"),
-                # 尝试直接插件名
-                os.path.join(astrbot_root_dir, "config", "astrbot_plugin_afdian_model.json"),
-                # 尝试在插件目录中查找
-                os.path.join(PLUGIN_DIR, "config.json"),
-                os.path.join(plugin_dir, "config.json"),
-                # 备用路径
-                os.path.join(DATA_DIR, "config", "astrbot_plugin_afdian_model_config.json"),
-            ]
+            # 如果插件配置不存在，尝试加载 AstrBot 的配置作为初始配置
+            try:
+                plugin_dir = os.path.dirname(DATA_DIR)
+                astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
+                
+                astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json")
+                if os.path.exists(astrbot_cfg_path):
+                    self._wire(f"[AfdianModel] 尝试从 AstrBot 配置迁移: {astrbot_cfg_path}", "info")
+                    with open(astrbot_cfg_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        if content.startswith('\ufeff'):
+                            content = content[1:]
+                        astrbot_cfg = json.loads(content)
+                        if astrbot_cfg:
+                            self._save_plugin_config(astrbot_cfg)
+                            return astrbot_cfg
+            except Exception as e:
+                self._wire(f"[AfdianModel] 迁移 AstrBot 配置失败: {e}", "warning")
             
-            self._wire(f"[AfdianModel] 查找配置文件，DATA_DIR={DATA_DIR}", "info")
-            self._wire(f"[AfdianModel] 可能路径: {possible_paths}", "info")
-            
-            for config_path in possible_paths:
-                self._wire(f"[AfdianModel] 检查: {config_path} exists={os.path.exists(config_path)}", "info")
-                if os.path.exists(config_path):
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        cfg = json.load(f)
-                        if cfg:
-                            self._wire(f"[AfdianModel] 从配置文件读取: path={config_path} keys={list(cfg.keys())}", "info")
-                            return cfg
-            
-            # 如果配置文件不存在，使用初始化时传入的配置
+            # 如果还是没有，使用初始化配置
             cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
+            if cfg:
+                self._save_plugin_config(cfg)
             self._wire(f"[AfdianModel] 使用初始化配置: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
             return cfg
         except Exception as e:
@@ -819,6 +838,77 @@ class AfdianModelPlugin(Star):
             f"状态: {status_text}"
             f"{plan_info}"
         )
+    
+    @filter.command("afdian_getconfig")
+    async def cmd_getconfig(self, event: AstrMessageEvent):
+        """查看当前配置（管理员）"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        cfg = self._config()
+        if not cfg:
+            yield event.plain_result("当前无配置")
+            return
+        config_lines = []
+        for k, v in sorted(cfg.items()):
+            if "token" in k.lower():
+                v = "***"
+            config_lines.append(f"{k}: {v}")
+        yield event.plain_result("当前配置:\n" + "\n".join(config_lines))
+    
+    @filter.command("afdian_setconfig")
+    async def cmd_setconfig(self, event: AstrMessageEvent):
+        """设置配置项（管理员）: /afdian_setconfig <key> <value>"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            yield event.plain_result("用法: /afdian_setconfig <key> <value>\n\n支持的key:\n"
+                                      "- model_list: 模型列表，逗号分隔\n"
+                                      "- plan_id_1: 第一级方案ID\n"
+                                      "- days_1: 第一级天数\n"
+                                      "- models_1: 第一级模型前缀，逗号分隔\n"
+                                      "- plan_id_2: 第二级方案ID\n"
+                                      "- days_2: 第二级天数\n"
+                                      "- models_2: 第二级模型前缀，逗号分隔\n"
+                                      "- afdian_user_id: 爱发电用户ID\n"
+                                      "- afdian_token: 爱发电API Token\n"
+                                      "- afdian_api_base: 爱发电API地址（可选）")
+            return
+        key = parts[1]
+        value = parts[2]
+        cfg = self._config()
+        cfg[key] = value
+        self._save_plugin_config(cfg)
+        yield event.plain_result(f"配置已更新: {key} = {value if 'token' not in key.lower() else '***'}")
+    
+    @filter.command("afdian_migrateconfig")
+    async def cmd_migrateconfig(self, event: AstrMessageEvent):
+        """从 AstrBot 配置迁移到插件配置（管理员）"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        try:
+            plugin_dir = os.path.dirname(DATA_DIR)
+            astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
+            astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json")
+            
+            if os.path.exists(astrbot_cfg_path):
+                with open(astrbot_cfg_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if content.startswith('\ufeff'):
+                        content = content[1:]
+                    astrbot_cfg = json.loads(content)
+                    if astrbot_cfg:
+                        self._save_plugin_config(astrbot_cfg)
+                        yield event.plain_result(f"配置迁移成功！\n迁移内容: {list(astrbot_cfg.keys())}")
+                    else:
+                        yield event.plain_result("AstrBot 配置为空")
+            else:
+                yield event.plain_result("未找到 AstrBot 配置文件")
+        except Exception as e:
+            yield event.plain_result(f"迁移失败: {e}")
 
     async def _check_admin(self, event: AstrMessageEvent) -> bool:
         try:
