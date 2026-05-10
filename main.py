@@ -578,14 +578,17 @@ class AfdianModelPlugin(Star):
                 return
 
         try:
-            self.context.provider_manager.set_provider(
+            await self.context.provider_manager.set_provider(
                 model_name, ProviderType.CHAT_COMPLETION, umo
             )
         except Exception as e:
-            self._wire(f"[AfdianModel] set_provider失败，尝试备用方式: {e}", "warning")
+            self._wire(f"[AfdianModel] set_provider失败，尝试直写sp.session_put: {e}", "warning")
             try:
-                sp_key = f"curr_provider_{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"
-                sp.put(sp_key, model_name)
+                await sp.session_put(
+                    umo,
+                    "provider_perf_chat_completion",
+                    model_name,
+                )
             except Exception as e2:
                 yield event.plain_result(f"切换模型失败: {e2}")
                 return
@@ -954,9 +957,16 @@ class AfdianModelPlugin(Star):
                         if sp.get(current_key) and default_provider:
                             try:
                                 umo = json.loads(key.replace(SP_UMO_PREFIX, ""))
-                                self.context.provider_manager.set_provider(
-                                    default_provider, ProviderType.CHAT_COMPLETION, umo
-                                )
+                                try:
+                                    await self.context.provider_manager.set_provider(
+                                        default_provider, ProviderType.CHAT_COMPLETION, umo
+                                    )
+                                except Exception:
+                                    await sp.session_put(
+                                        umo,
+                                        "provider_perf_chat_completion",
+                                        default_provider,
+                                    )
                             except Exception:
                                 pass
                         sp.put(key, None)
