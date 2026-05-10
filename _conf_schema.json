@@ -15,18 +15,6 @@
         "type": "string",
         "hint": "在爱发电开发者后台获取，注意保密"
     },
-    "afdian_public_key": {
-        "description": "Webhook RSA公钥",
-        "type": "text",
-        "hint": "在爱发电开发者后台获取，不用webhook可留空",
-        "default": ""
-    },
-    "webhook_port": {
-        "description": "Webhook监听端口",
-        "type": "int",
-        "hint": "爱发电回调端口，默认6199",
-        "default": 6199
-    },
     "model_list": {
         "description": "模型名称列表",
         "type": "list",
