@@ -69,7 +69,8 @@ class AfdianModelPlugin(Star):
         super().__init__(context)
         self._api = None
         self._processed_orders = set()
-        self._star_config = config or {}
+        self._context = context
+        self._star_config = config if config else {}
         self._init_data_dir()
         self._processed_orders = self._load_processed_orders()
         self._sync_plan_mapping()
@@ -127,16 +128,10 @@ class AfdianModelPlugin(Star):
 
     def _config(self) -> dict:
         try:
-            # 优先使用 context 获取最新配置
-            cfg = self.context.get_star_config()
-            self._wire(f"[AfdianModel] context.get_star_config() 返回: {cfg}", "info")
-            if cfg is None:
-                cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
-                self._wire(f"[AfdianModel] 使用 _star_config: {cfg}", "info")
-            # 打印所有配置 key，帮助调试
-            if cfg:
-                self._wire(f"[AfdianModel] 配置 keys: {list(cfg.keys())}", "info")
-            return cfg if cfg else {}
+            # 直接使用初始化时传入的配置
+            cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
+            self._wire(f"[AfdianModel] 配置 keys: {list(cfg.keys()) if cfg else 'EMPTY'}", "info")
+            return cfg
         except Exception as e:
             self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
             return {}
