@@ -295,10 +295,10 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("插件未配置爱发电API，请联系管理员")
             return
         parts = event.message_str.strip().split()
-        if len(parts) < 3:
+        if len(parts) < 2:
             yield event.plain_result("用法: /afdian_bind <订单号>")
             return
-        order_no = parts[2]
+        order_no = parts[1]
         resp = await api.query_order(page=1)
         if resp.get("ec") != 200:
             yield event.plain_result("查询订单失败，请稍后重试")
@@ -385,11 +385,11 @@ class AfdianModelPlugin(Star):
     async def cmd_switch(self, event: AstrMessageEvent):
         """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
         parts = event.message_str.strip().split()
-        if len(parts) < 4:
+        if len(parts) < 3:
             yield event.plain_result("用法: /afdian_switch <前缀> <模型名>")
             return
-        prefix = parts[2]
-        model_name = parts[3]
+        prefix = parts[1]
+        model_name = parts[2]
         group_id = event.get_group_id()
 
         if group_id:
@@ -459,16 +459,16 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("无权限")
             return
         parts = event.message_str.strip().split()
-        if len(parts) < 5:
+        if len(parts) < 4:
             yield event.plain_result("用法: /afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>")
             return
-        plan_id = parts[2]
+        plan_id = parts[1]
         try:
-            days = int(parts[3])
+            days = int(parts[2])
         except ValueError:
             yield event.plain_result("天数必须为整数")
             return
-        prefixes = [p.strip() for p in parts[4].split(",") if p.strip()]
+        prefixes = [p.strip() for p in parts[3].split(",") if p.strip()]
         if not prefixes:
             yield event.plain_result("至少需要一个模型前缀")
             return
@@ -484,10 +484,10 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("无权限")
             return
         parts = event.message_str.strip().split()
-        if len(parts) != 3:
+        if len(parts) != 2:
             yield event.plain_result("用法: /afdian_delplan <plan_id>")
             return
-        plan_id = parts[2]
+        plan_id = parts[1]
         mapping = self._get_plan_mapping()
         if plan_id in mapping:
             del mapping[plan_id]
@@ -503,11 +503,11 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("无权限")
             return
         parts = event.message_str.strip().split()
-        if len(parts) != 4:
+        if len(parts) != 3:
             yield event.plain_result("用法: /afdian_addadmin <群号> <QQ号>")
             return
-        group_id = parts[2]
-        qq = parts[3]
+        group_id = parts[1]
+        qq = parts[2]
         admins = self._get_group_admins()
         if group_id not in admins:
             admins[group_id] = []
@@ -523,11 +523,11 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("无权限")
             return
         parts = event.message_str.strip().split()
-        if len(parts) != 4:
+        if len(parts) != 3:
             yield event.plain_result("用法: /afdian_deladmin <群号> <QQ号>")
             return
-        group_id = parts[2]
-        qq = parts[3]
+        group_id = parts[1]
+        qq = parts[2]
         admins = self._get_group_admins()
         if group_id in admins and qq in admins[group_id]:
             admins[group_id].remove(qq)
