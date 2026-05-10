@@ -157,7 +157,16 @@ class AfdianModelPlugin(Star):
         return [item.strip() for item in s.split(",") if item.strip()]
 
     def _sync_plan_mapping(self):
-        existing = self._get_plan_mapping()
+        # 每次同步时都重新读取配置
+        existing = {}
+        # 先从持久化存储中读取已有的映射（保留管理员手动添加的）
+        stored = sp.get(SP_PLAN_MAPPING, {})
+        if stored:
+            # 只保留管理员手动添加的方案（不在自动配置范围内的）
+            for plan_id, plan_data in stored.items():
+                if not plan_id.startswith("_auto_"):  # 标记自动配置的方案
+                    existing[plan_id] = plan_data
+        
         updated = False
         for level in ("1", "2"):
             plan_id = self._config().get(f"plan_id_{level}", "").strip()
@@ -165,11 +174,24 @@ class AfdianModelPlugin(Star):
             if not plan_id or not prefixes:
                 continue
             days = self._config().get(f"days_{level}", 30 if level == "1" else 365)
-            existing[plan_id] = {"days": days, "prefixes": self._list_to_str(prefixes)}
+            # 使用特殊前缀标记自动配置的方案
+            existing[f"_auto_{plan_id}"] = {"days": days, "prefixes": self._list_to_str(prefixes)}
             updated = True
             self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
         if updated:
             sp.put(SP_PLAN_MAPPING, existing)
+    
+    def _get_plan_mapping(self) -> dict:
+        mapping = sp.get(SP_PLAN_MAPPING, {})
+        result = {}
+        for plan_id, plan_data in mapping.items():
+            # 去掉自动配置方案的前缀
+            clean_id = plan_id[6:] if plan_id.startswith("_auto_") else plan_id
+            result[clean_id] = {
+                "days": plan_data.get("days", 0),
+                "prefixes": self._str_to_list(plan_data.get("prefixes", ""))
+            }
+        return result
 
     def _load_processed_orders(self) -> set:
         try:
@@ -186,17 +208,6 @@ class AfdianModelPlugin(Star):
                 json.dump(list(self._processed_orders), f)
         except Exception as e:
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
-
-    def _get_plan_mapping(self) -> dict:
-        mapping = sp.get(SP_PLAN_MAPPING, {})
-        # 转换为 list 格式供代码使用
-        result = {}
-        for plan_id, plan_data in mapping.items():
-            result[plan_id] = {
-                "days": plan_data.get("days", 0),
-                "prefixes": self._str_to_list(plan_data.get("prefixes", ""))
-            }
-        return result
 
     def _get_group_admins(self) -> dict:
         admins = sp.get(SP_GROUP_ADMINS, {})
@@ -591,7 +602,7 @@ class AfdianModelPlugin(Star):
         if not prefixes:
             yield event.plain_result("至少需要一个模型前缀")
             return
-        # 先获取原始的 mapping（没有经过转换的）
+        # 获取原始的 mapping
         mapping = sp.get(SP_PLAN_MAPPING, {})
         mapping[plan_id] = {"days": days, "prefixes": self._list_to_str(prefixes)}
         sp.put(SP_PLAN_MAPPING, mapping)
@@ -608,10 +619,17 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("用法: /afdian_delplan <plan_id>")
             return
         plan_id = parts[1]
-        # 获取原始的 mapping
         mapping = sp.get(SP_PLAN_MAPPING, {})
+        # 检查是否有 _auto_ 前缀的版本
+        auto_key = f"_auto_{plan_id}"
+        deleted = False
         if plan_id in mapping:
             del mapping[plan_id]
+            deleted = True
+        if auto_key in mapping:
+            del mapping[auto_key]
+            deleted = True
+        if deleted:
             sp.put(SP_PLAN_MAPPING, mapping)
             yield event.plain_result(f"方案已删除: {plan_id}")
         else:
