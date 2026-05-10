@@ -365,10 +365,10 @@ class AfdianModelPlugin(Star):
         out_trade_no = order.get("out_trade_no", "")
         if not out_trade_no:
             return
+        # 首先检查订单是否已处理
         if out_trade_no in self._processed_orders:
+            self._wire(f"[AfdianModel] 订单{out_trade_no}已处理，跳过")
             return
-        self._processed_orders.add(out_trade_no)
-        self._save_processed_orders()
 
         status = order.get("status", 0)
         if status != 2:
@@ -381,16 +381,28 @@ class AfdianModelPlugin(Star):
             self._wire(f"[AfdianModel] 方案{plan_id}未配置，订单{out_trade_no}")
             return
 
+        # 验证通过后，先标记订单为已处理，再处理用户数据
+        self._processed_orders.add(out_trade_no)
+        self._save_processed_orders()
+
         plan = plan_mapping[plan_id]
         days = plan["days"]
         prefixes = plan["prefixes"]
         user_id = order.get("user_id", "")
 
+        # 检查用户是否已经通过其他方式绑定（比如手动绑定）
         existing = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
         umo_key = existing if existing else None
         if umo_key:
             umo_data = sp.get(umo_key, {})
             if umo_data:
+                # 检查用户数据中是否已经记录了这个订单
+                used_orders = umo_data.get("used_orders", [])
+                if out_trade_no in used_orders:
+                    self._wire(f"[AfdianModel] 订单{out_trade_no}已在用户数据中，跳过累加")
+                    return
+                
+                # 累加时间
                 umo_data["remaining_days"] += days
                 # 合并 prefixes 并去重
                 existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
@@ -399,6 +411,9 @@ class AfdianModelPlugin(Star):
                 umo_data["expire_time"] = (
                     datetime.now() + timedelta(days=umo_data["remaining_days"])
                 ).strftime("%Y-%m-%d %H:%M:%S")
+                # 记录已使用的订单
+                used_orders.append(out_trade_no)
+                umo_data["used_orders"] = used_orders
                 sp.put(umo_key, umo_data)
                 self._wire(
                     f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
@@ -506,7 +521,7 @@ class AfdianModelPlugin(Star):
 
         umo = event.unified_msg_origin
         create_time = order.get("create_time", 0)
-        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
+        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time, order_no)
 
         self._wire(
             f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} level={plan.get('level')} "
@@ -519,9 +534,13 @@ class AfdianModelPlugin(Star):
             available.extend(self._match_prefixes(p, model_list))
 
         yield event.plain_result(
-            f"绑定成功，方案：Lv{plan.get('level')}（{plan['days']}天），"
-            f"剩余{umo_data['remaining_days']}天，"
-            f"可用模型：{', '.join(available) if available else '无'}"
+            f"✅ 绑定成功！\n\n"
+            f"📦 方案：Lv{plan.get('level')}（{plan['days']}天）\n"
+            f"⏰ 剩余：{umo_data['remaining_days']}天\n"
+            f"🤖 可用模型：{', '.join(available) if available else '无'}\n\n"
+            f"📋 接下来你可以：\n"
+            f"• 使用 /afdian_models 查看可用模型\n"
+            f"• 使用 /afdian_status 查看赞助状态"
         )
 
     @filter.command("afdian_models")
@@ -541,6 +560,7 @@ class AfdianModelPlugin(Star):
             model_lines.append(f"{i}. {model}")
         result = "**可用模型：**\n" + "\n".join(model_lines) if model_lines else "**可用模型：**\n无"
         result += f"\n\n**当前模型：**{current}"
+        result += f"\n\n💡 提示：使用 /afdian_switch <模型名> 切换模型"
         yield event.plain_result(result)
 
     @filter.command("afdian_switch")
@@ -666,15 +686,27 @@ class AfdianModelPlugin(Star):
         
         user_id = found.get("user_id", "")
         
-        # 查找并销毁用户数据
+        # 查找并处理用户数据
         umo_key = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
         if umo_key:
-            # 销毁用户数据
-            sp.put(umo_key, None)
-            # 从活跃列表移除
-            self._unregister_umo(umo_key)
-            # 删除用户映射
-            sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+            umo_data = sp.get(umo_key, {})
+            if umo_data:
+                # 从用户数据中移除这个订单
+                used_orders = umo_data.get("used_orders", [])
+                if order_no in used_orders:
+                    used_orders.remove(order_no)
+                    umo_data["used_orders"] = used_orders
+                    sp.put(umo_key, umo_data)
+                    self._wire(f"[AfdianModel] 从用户数据中移除订单: {order_no}")
+                # 如果没有其他订单了，可以选择销毁用户数据
+                if not used_orders:
+                    # 销毁用户数据
+                    sp.put(umo_key, None)
+                    # 从活跃列表移除
+                    self._unregister_umo(umo_key)
+                    # 删除用户映射
+                    sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+                    self._wire(f"[AfdianModel] 用户数据已销毁: {user_id}")
         
         # 从已处理订单中移除
         self._processed_orders.discard(order_no)
