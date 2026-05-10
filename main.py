@@ -504,6 +504,9 @@ class AfdianModelPlugin(Star):
     @filter.command("afdian_reset")
     async def cmd_reset(self, event: AstrMessageEvent):
         """释放指定订单的绑定状态，销毁激活信息"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
