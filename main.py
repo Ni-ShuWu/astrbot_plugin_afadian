@@ -192,6 +192,37 @@ class AfdianModelPlugin(Star):
                 "prefixes": self._str_to_list(plan_data.get("prefixes", ""))
             }
         return result
+    
+    def _verify_and_get_plan(self, order_plan_id: str) -> dict | None:
+        """
+        直接从配置中验证订单的plan_id，返回匹配的方案信息
+        避免依赖持久化存储的映射
+        """
+        self._wire(f"[AfdianModel] 验证plan_id: {order_plan_id}", "info")
+        
+        # 直接从配置读取 plan_id_1 和 plan_id_2
+        plan_id_1 = self._config().get("plan_id_1", "").strip()
+        plan_id_2 = self._config().get("plan_id_2", "").strip()
+        
+        self._wire(f"[AfdianModel] 配置中的plan_id_1: {plan_id_1}", "info")
+        self._wire(f"[AfdianModel] 配置中的plan_id_2: {plan_id_2}", "info")
+        
+        # 检查是否匹配 plan_id_1
+        if plan_id_1 and order_plan_id == plan_id_1:
+            days = self._config().get("days_1", 30)
+            prefixes = self._parse_models(self._config().get("models_1", ""))
+            self._wire(f"[AfdianModel] 匹配到Lv1方案: days={days}, prefixes={prefixes}", "info")
+            return {"days": days, "prefixes": prefixes, "level": "1"}
+        
+        # 检查是否匹配 plan_id_2
+        if plan_id_2 and order_plan_id == plan_id_2:
+            days = self._config().get("days_2", 365)
+            prefixes = self._parse_models(self._config().get("models_2", ""))
+            self._wire(f"[AfdianModel] 匹配到Lv2方案: days={days}, prefixes={prefixes}", "info")
+            return {"days": days, "prefixes": prefixes, "level": "2"}
+        
+        self._wire(f"[AfdianModel] 未匹配到任何方案", "warning")
+        return None
 
     def _load_processed_orders(self) -> set:
         try:
@@ -395,8 +426,10 @@ class AfdianModelPlugin(Star):
             return
 
         plan_id = order.get("plan_id", "")
-        plan_mapping = self._get_plan_mapping()
-        if plan_id not in plan_mapping:
+        
+        # 使用新的验证函数直接匹配
+        plan = self._verify_and_get_plan(plan_id)
+        if not plan:
             yield event.plain_result("方案未配置，请联系管理员")
             return
 
@@ -404,12 +437,11 @@ class AfdianModelPlugin(Star):
         self._save_processed_orders()
 
         umo = event.unified_msg_origin
-        plan = plan_mapping[plan_id]
         create_time = order.get("create_time", 0)
         umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
 
         self._wire(
-            f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} "
+            f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} level={plan.get('level')} "
             f"days={umo_data['remaining_days']} order_time={umo_data['order_time']} sender={event.get_sender_id()}"
         )
 
@@ -419,7 +451,7 @@ class AfdianModelPlugin(Star):
             available.extend(self._match_prefixes(p, model_list))
 
         yield event.plain_result(
-            f"绑定成功，方案：{plan_id}（{plan['days']}天），"
+            f"绑定成功，方案：Lv{plan.get('level')}（{plan['days']}天），"
             f"剩余{umo_data['remaining_days']}天，"
             f"可用模型：{', '.join(available) if available else '无'}"
         )
@@ -728,11 +760,10 @@ class AfdianModelPlugin(Star):
         status_text = {1: "待支付", 2: "已支付", 3: "已退款"}.get(status, f"未知({status})")
         plan_info = ""
         if plan_id:
-            # 使用 _get_plan_mapping 获取转换后的数据
-            mapping = self._get_plan_mapping()
-            if plan_id in mapping:
-                p = mapping[plan_id]
-                plan_info = f"\n已配置方案: {p['days']}天 [{', '.join(p['prefixes'])}]"
+            # 使用新的验证函数
+            plan = self._verify_and_get_plan(plan_id)
+            if plan:
+                plan_info = f"\n已配置方案: Lv{plan.get('level')} {plan['days']}天 [{', '.join(plan['prefixes'])}]"
             else:
                 plan_info = "\n⚠ 方案未配置，请添加到配置"
         yield event.plain_result(
