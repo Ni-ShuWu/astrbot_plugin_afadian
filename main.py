@@ -557,6 +557,68 @@ class AfdianModelPlugin(Star):
         else:
             yield event.plain_result("管理员不存在")
 
+    @filter.command("afdian_query")
+    async def cmd_query(self, event: AstrMessageEvent):
+        """管理员查询指定订单号的plan_id"""
+        if not await self._check_admin(event):
+            yield event.plain_result("无权限")
+            return
+        parts = event.message_str.strip().split()
+        if len(parts) < 2:
+            yield event.plain_result("用法: /afdian_query <订单号>")
+            return
+        order_no = parts[1]
+        api = self._get_api()
+        if not api:
+            yield event.plain_result("API未配置")
+            return
+        yield event.plain_result(f"正在查询订单 {order_no} ...")
+        pg = 1
+        found = None
+        while True:
+            resp = await api.query_order(page=pg)
+            if resp.get("ec") != 200:
+                yield event.plain_result("API查询失败")
+                return
+            data = resp.get("data", {})
+            orders = data.get("list", [])
+            if not orders:
+                break
+            for o in orders:
+                if o.get("out_trade_no") == order_no:
+                    found = o
+                    break
+            if found:
+                break
+            if pg >= data.get("total_page", 1):
+                break
+            pg += 1
+        if not found:
+            yield event.plain_result(f"未找到订单 {order_no}")
+            return
+        plan_id = found.get("plan_id", "")
+        plan_title = found.get("plan_title", "")
+        amount = found.get("total_amount", "")
+        status = found.get("status", 0)
+        status_text = {1: "待支付", 2: "已支付", 3: "已退款"}.get(status, f"未知({status})")
+        plan_info = ""
+        if plan_id:
+            mapping = self._get_plan_mapping()
+            if plan_id in mapping:
+                p = mapping[plan_id]
+                plan_info = f"\n已配置方案: {p['days']}天 [{', '.join(p['prefixes'])}]"
+            else:
+                plan_info = "\n⚠ 方案未配置，请添加到配置"
+        yield event.plain_result(
+            f"订单查询结果:\n"
+            f"订单号: {order_no}\n"
+            f"plan_id: {plan_id or '无'}\n"
+            f"方案名: {plan_title or '未知'}\n"
+            f"金额: {amount}\n"
+            f"状态: {status_text}"
+            f"{plan_info}"
+        )
+
     async def _check_admin(self, event: AstrMessageEvent) -> bool:
         try:
             config = getattr(self.context, "astrbot_config", {})
