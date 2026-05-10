@@ -129,14 +129,25 @@ class AfdianModelPlugin(Star):
     def _config(self) -> dict:
         try:
             # 尝试多种路径查找配置文件
+            data_parent_dir = os.path.dirname(DATA_DIR)
             possible_paths = [
                 # AstrBot 标准配置路径
-                os.path.join(os.path.dirname(DATA_DIR), "config", "astrbot_plugin_afdian_model_config.json"),
+                os.path.join(data_parent_dir, "config", "astrbot_plugin_afdian_model_config.json"),
+                # 尝试不带plugin前缀
+                os.path.join(data_parent_dir, "config", "afdian_model_config.json"),
+                # 尝试直接插件名
+                os.path.join(data_parent_dir, "config", "astrbot_plugin_afdian_model.json"),
+                # 尝试在插件目录中查找
+                os.path.join(PLUGIN_DIR, "config.json"),
                 # 备用路径
                 os.path.join(DATA_DIR, "config", "astrbot_plugin_afdian_model_config.json"),
             ]
             
+            self._wire(f"[AfdianModel] 查找配置文件，DATA_DIR={DATA_DIR}", "info")
+            self._wire(f"[AfdianModel] 可能路径: {possible_paths}", "info")
+            
             for config_path in possible_paths:
+                self._wire(f"[AfdianModel] 检查: {config_path} exists={os.path.exists(config_path)}", "info")
                 if os.path.exists(config_path):
                     with open(config_path, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
