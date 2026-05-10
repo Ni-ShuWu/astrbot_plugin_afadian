@@ -28,7 +28,8 @@ class AfdianAPI:
     def __init__(self, user_id: str, token: str, api_base: str, log_fn=None):
         self._user_id = user_id
         self._token = token
-        self._api_base = api_base.rstrip("/")
+        import re
+        self._api_base = re.sub(r"/api/open.*$", "", api_base).rstrip("/")
         self._wire = log_fn or logger.info
 
     async def query_order(self, page: int = 1) -> dict:
