@@ -1,4 +1,10 @@
 {
+    "afdian_api_base": {
+        "description": "爱发电API地址",
+        "type": "string",
+        "hint": "反代/中转地址，默认官方API",
+        "default": "https://afdian.net"
+    },
     "afdian_user_id": {
         "description": "爱发电用户ID",
         "type": "string",

@@ -1,11 +1,9 @@
 import asyncio
-import hashlib
 import json
 import os
 import time
 from datetime import datetime, timedelta
 
-import aiohttp
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
@@ -16,7 +14,6 @@ from astrbot.api.star import Context, Star
 from astrbot.core import sp
 from astrbot.core.provider.entities import ProviderType
 
-API_BASE = "https://afdian.net/api/open"
 POLL_INTERVAL = 6 * 3600
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
 SP_GROUP_ADMINS = "afdian_model:group_admins"
@@ -27,42 +24,37 @@ ORDERS_FILE = "processed_orders.json"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 ORDERS_PATH = os.path.join(PLUGIN_DIR, ORDERS_FILE)
 
+DEFAULT_API_BASE = "https://afdian.net"
+
 
 class AfdianAPI:
-    def __init__(self, user_id: str, token: str):
-        self.user_id = user_id
-        self.token = token
-
-    def _sign(self, params: dict) -> tuple:
-        json_str = json.dumps(params, separators=(",", ":"))
-        ts = int(time.time())
-        raw = f"{self.token}params{json_str}ts{ts}user_id{self.user_id}"
-        sign = hashlib.md5(raw.encode()).hexdigest()
-        return sign, ts
-
-    async def _post(self, endpoint: str, params: dict) -> dict:
-        sign, ts = self._sign(params)
-        body = {
-            "user_id": self.user_id,
-            "params": json.dumps(params),
-            "ts": ts,
-            "sign": sign,
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{API_BASE}/{endpoint}", json=body, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    return await resp.json()
-        except Exception as e:
-            logger.error(f"[AfdianModel] API请求失败: {endpoint} - {e}")
-            return {"ec": -1, "em": str(e)}
+    def __init__(self, user_id: str, token: str, api_base: str):
+        from afdiankit import Afdian
+        self._user_id = user_id
+        self._token = token
+        base_url = api_base.replace("/api/open", "")
+        self._client = Afdian(base_url=base_url)
 
     async def query_order(self, page: int = 1) -> dict:
-        return await self._post("query-order", {"page": page})
-
-    async def ping(self) -> dict:
-        return await self._post("ping", {})
+        from afdiankit.open.utils import sign
+        params = {"page": page}
+        ts = int(time.time())
+        json_params = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
+        sig = sign(self._token, json_params, ts, self._user_id)
+        body = {
+            "user_id": self._user_id,
+            "params": json_params,
+            "ts": ts,
+            "sign": sig,
+        }
+        try:
+            resp = await self._client.arequest(
+                "POST", "/api/open/query-order", json=body
+            )
+            return resp.json()
+        except Exception as e:
+            logger.error(f"[AfdianModel] API请求失败: query-order - {e}")
+            return {"ec": -1, "em": str(e)}
 
 
 class AfdianModelPlugin(Star):
@@ -83,8 +75,9 @@ class AfdianModelPlugin(Star):
             cfg = self._config()
             uid = cfg.get("afdian_user_id", "")
             token = cfg.get("afdian_token", "")
+            api_base = cfg.get("afdian_api_base", "https://afdian.net")
             if uid and token:
-                self._api = AfdianAPI(uid, token)
+                self._api = AfdianAPI(uid, token, api_base)
         return self._api
 
     def _config(self) -> dict:

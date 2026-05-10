@@ -96,5 +96,6 @@ ts 误差 3600 秒内有效。
 
 ## 依赖
 
-- `aiohttp`：HTTP 客户端
+- `aiohttp`：AstrBot 框架依赖
 - `pycryptodome`：RSA 签名验证
+- `afdiankit`：爱发电 Python SDK（自动签名、类型安全）
