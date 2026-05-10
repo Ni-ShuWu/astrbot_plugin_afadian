@@ -137,7 +137,9 @@ class AfdianModelPlugin(Star):
             return {}
 
     def _get_model_list(self) -> list:
-        raw = self._config().get("model_list", "")
+        return self._parse_models(self._config().get("model_list", ""))
+
+    def _parse_models(self, raw) -> list:
         if isinstance(raw, list):
             return raw
         if isinstance(raw, str) and raw.strip():
@@ -149,13 +151,10 @@ class AfdianModelPlugin(Star):
         updated = False
         for level in ("1", "2"):
             plan_id = self._config().get(f"plan_id_{level}", "").strip()
-            models_str = self._config().get(f"models_{level}", "").strip()
-            if not plan_id or not models_str:
+            prefixes = self._parse_models(self._config().get(f"models_{level}", ""))
+            if not plan_id or not prefixes:
                 continue
             days = self._config().get(f"days_{level}", 30 if level == "1" else 365)
-            prefixes = [m.strip() for m in models_str.split(",") if m.strip()]
-            if not prefixes:
-                continue
             existing[plan_id] = {"days": days, "prefixes": prefixes}
             updated = True
             self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
