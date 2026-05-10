@@ -145,6 +145,16 @@ class AfdianModelPlugin(Star):
         if isinstance(raw, str) and raw.strip():
             return [m.strip() for m in raw.split(",") if m.strip()]
         return []
+    
+    def _list_to_str(self, lst: list) -> str:
+        if not lst:
+            return ""
+        return ",".join(lst)
+    
+    def _str_to_list(self, s: str) -> list:
+        if not s or not isinstance(s, str):
+            return []
+        return [item.strip() for item in s.split(",") if item.strip()]
 
     def _sync_plan_mapping(self):
         existing = self._get_plan_mapping()
@@ -155,7 +165,7 @@ class AfdianModelPlugin(Star):
             if not plan_id or not prefixes:
                 continue
             days = self._config().get(f"days_{level}", 30 if level == "1" else 365)
-            existing[plan_id] = {"days": days, "prefixes": prefixes}
+            existing[plan_id] = {"days": days, "prefixes": self._list_to_str(prefixes)}
             updated = True
             self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
         if updated:
@@ -178,16 +188,33 @@ class AfdianModelPlugin(Star):
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
     def _get_plan_mapping(self) -> dict:
-        return sp.get(SP_PLAN_MAPPING, {})
+        mapping = sp.get(SP_PLAN_MAPPING, {})
+        # 转换为 list 格式供代码使用
+        result = {}
+        for plan_id, plan_data in mapping.items():
+            result[plan_id] = {
+                "days": plan_data.get("days", 0),
+                "prefixes": self._str_to_list(plan_data.get("prefixes", ""))
+            }
+        return result
 
     def _get_group_admins(self) -> dict:
-        return sp.get(SP_GROUP_ADMINS, {})
+        admins = sp.get(SP_GROUP_ADMINS, {})
+        result = {}
+        for group_id, admin_str in admins.items():
+            result[group_id] = self._str_to_list(admin_str)
+        return result
 
     def _umo_key(self, umo) -> str:
         return f"{SP_UMO_PREFIX}{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"
 
     def _get_umo_data(self, umo) -> dict:
-        return sp.get(self._umo_key(umo), {})
+        data = sp.get(self._umo_key(umo), {})
+        if data:
+            # 转换 prefixes 为 list 供代码使用
+            data = dict(data)  # 复制一份，避免修改原始数据
+            data["prefixes"] = self._str_to_list(data.get("prefixes", ""))
+        return data
 
     def _set_umo_data(self, umo, data: dict):
         sp.put(self._umo_key(umo), data)
@@ -255,7 +282,10 @@ class AfdianModelPlugin(Star):
             umo_data = sp.get(umo_key, {})
             if umo_data:
                 umo_data["remaining_days"] += days
-                umo_data["prefixes"] = list(set(umo_data.get("prefixes", []) + prefixes))
+                # 合并 prefixes 并去重
+                existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
+                combined_prefixes = list(set(existing_prefixes + prefixes))
+                umo_data["prefixes"] = self._list_to_str(combined_prefixes)
                 umo_data["expire_time"] = (
                     datetime.now() + timedelta(days=umo_data["remaining_days"])
                 ).strftime("%Y-%m-%d %H:%M:%S")
@@ -277,20 +307,23 @@ class AfdianModelPlugin(Star):
                 new_data = sp.get(umo_key, {})
                 if not new_data:
                     new_data = {"remaining_days": old_data.get("remaining_days", 0),
-                                "prefixes": old_data.get("prefixes", []),
+                                "prefixes": old_data.get("prefixes", ""),
                                 "expire_time": old_data.get("expire_time", ""),
                                 "plan_id": old_data.get("plan_id", ""),
                                 "order_time": old_data.get("order_time", "")}
-                    self._set_umo_data(umo, new_data)
+                self._set_umo_data(umo, new_data)
                 sp.put(existing, None)
                 self._unregister_umo(existing)
         umo_data = self._get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
         if umo_data:
             umo_data["remaining_days"] += days
-            umo_data["prefixes"] = list(set(umo_data.get("prefixes", []) + prefixes))
+            # 合并 prefixes 并去重
+            existing_prefixes = self._str_to_list(umo_data.get("prefixes", ""))
+            combined_prefixes = list(set(existing_prefixes + prefixes))
+            umo_data["prefixes"] = self._list_to_str(combined_prefixes)
         else:
-            umo_data = {"remaining_days": days, "prefixes": prefixes, "plan_id": plan_id}
+            umo_data = {"remaining_days": days, "prefixes": self._list_to_str(prefixes), "plan_id": plan_id}
         umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
             "%Y-%m-%d %H:%M:%S"
@@ -490,8 +523,9 @@ class AfdianModelPlugin(Star):
         if not prefixes:
             yield event.plain_result("至少需要一个模型前缀")
             return
-        mapping = self._get_plan_mapping()
-        mapping[plan_id] = {"days": days, "prefixes": prefixes}
+        # 先获取原始的 mapping（没有经过转换的）
+        mapping = sp.get(SP_PLAN_MAPPING, {})
+        mapping[plan_id] = {"days": days, "prefixes": self._list_to_str(prefixes)}
         sp.put(SP_PLAN_MAPPING, mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
@@ -506,7 +540,8 @@ class AfdianModelPlugin(Star):
             yield event.plain_result("用法: /afdian_delplan <plan_id>")
             return
         plan_id = parts[1]
-        mapping = self._get_plan_mapping()
+        # 获取原始的 mapping
+        mapping = sp.get(SP_PLAN_MAPPING, {})
         if plan_id in mapping:
             del mapping[plan_id]
             sp.put(SP_PLAN_MAPPING, mapping)
@@ -526,11 +561,12 @@ class AfdianModelPlugin(Star):
             return
         group_id = parts[1]
         qq = parts[2]
-        admins = self._get_group_admins()
-        if group_id not in admins:
-            admins[group_id] = []
-        if qq not in admins[group_id]:
-            admins[group_id].append(qq)
+        # 获取原始的 admins 数据
+        admins = sp.get(SP_GROUP_ADMINS, {})
+        admin_list = self._str_to_list(admins.get(group_id, ""))
+        if qq not in admin_list:
+            admin_list.append(qq)
+        admins[group_id] = self._list_to_str(admin_list)
         sp.put(SP_GROUP_ADMINS, admins)
         yield event.plain_result(f"已添加群{group_id}的管理员: {qq}")
 
@@ -546,11 +582,15 @@ class AfdianModelPlugin(Star):
             return
         group_id = parts[1]
         qq = parts[2]
-        admins = self._get_group_admins()
-        if group_id in admins and qq in admins[group_id]:
-            admins[group_id].remove(qq)
-            if not admins[group_id]:
+        # 获取原始的 admins 数据
+        admins = sp.get(SP_GROUP_ADMINS, {})
+        admin_list = self._str_to_list(admins.get(group_id, ""))
+        if qq in admin_list:
+            admin_list.remove(qq)
+            if not admin_list:
                 del admins[group_id]
+            else:
+                admins[group_id] = self._list_to_str(admin_list)
             sp.put(SP_GROUP_ADMINS, admins)
             yield event.plain_result(f"已移除群{group_id}的管理员: {qq}")
         else:
@@ -602,6 +642,7 @@ class AfdianModelPlugin(Star):
         status_text = {1: "待支付", 2: "已支付", 3: "已退款"}.get(status, f"未知({status})")
         plan_info = ""
         if plan_id:
+            # 使用 _get_plan_mapping 获取转换后的数据
             mapping = self._get_plan_mapping()
             if plan_id in mapping:
                 p = mapping[plan_id]
