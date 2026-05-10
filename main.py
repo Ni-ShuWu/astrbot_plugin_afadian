@@ -10,7 +10,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core import sp
 from astrbot.core.provider.entities import ProviderType
 
-POLL_INTERVAL = 6 * 3600
+POLL_INTERVAL = 1 * 3600
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
 SP_GROUP_ADMINS = "afdian_model:group_admins"
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
@@ -42,12 +42,20 @@ class AfdianAPI:
             "sign": sig,
         }
         try:
+            logger.info(f"[AfdianModel] API请求: query-order page={page}")
             resp = await self._client.arequest(
                 "POST", "/api/open/query-order", json=body
             )
-            return resp.json()
+            data = resp.json()
+            ec = data.get("ec", -1)
+            if ec == 200:
+                order_count = len(data.get("data", {}).get("list", []))
+                logger.info(f"[AfdianModel] API响应: query-order page={page} ec=200 orders={order_count}")
+            else:
+                logger.warning(f"[AfdianModel] API响应异常: query-order page={page} ec={ec} em={data.get('em', '')}")
+            return data
         except Exception as e:
-            logger.error(f"[AfdianModel] API请求失败: query-order - {e}")
+            logger.error(f"[AfdianModel] API请求失败: query-order page={page} - {e}")
             return {"ec": -1, "em": str(e)}
 
 
@@ -176,10 +184,12 @@ class AfdianModelPlugin(Star):
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 sp.put(umo_key, umo_data)
                 logger.info(
-                    f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天"
+                    f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
+                    f"订单{order.get('out_trade_no','')} 下单时间"
+                    f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
                 )
 
-    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo):
+    async def _bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0):
         days = plan["days"]
         prefixes = plan["prefixes"]
         existing = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
@@ -192,16 +202,19 @@ class AfdianModelPlugin(Star):
                     new_data = {"remaining_days": old_data.get("remaining_days", 0),
                                 "prefixes": old_data.get("prefixes", []),
                                 "expire_time": old_data.get("expire_time", ""),
-                                "plan_id": old_data.get("plan_id", "")}
+                                "plan_id": old_data.get("plan_id", ""),
+                                "order_time": old_data.get("order_time", "")}
                     self._set_umo_data(umo, new_data)
                 sp.put(existing, None)
                 self._unregister_umo(existing)
         umo_data = self._get_umo_data(umo)
+        order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
         if umo_data:
             umo_data["remaining_days"] += days
             umo_data["prefixes"] = list(set(umo_data.get("prefixes", []) + prefixes))
         else:
             umo_data = {"remaining_days": days, "prefixes": prefixes, "plan_id": plan_id}
+        umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
@@ -271,7 +284,13 @@ class AfdianModelPlugin(Star):
 
         umo = event.unified_msg_origin
         plan = plan_mapping[plan_id]
-        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo)
+        create_time = order.get("create_time", 0)
+        umo_data = await self._bind_user(order.get("user_id", ""), plan_id, plan, umo, create_time)
+
+        logger.info(
+            f"[AfdianModel] 用户绑定成功: order={order_no} plan={plan_id} "
+            f"days={umo_data['remaining_days']} order_time={umo_data['order_time']} sender={event.get_sender_id()}"
+        )
 
         model_list = self._config().get("model_list", [])
         available = []
@@ -365,6 +384,8 @@ class AfdianModelPlugin(Star):
             return
         current = sp.get(self._umo_key(event.unified_msg_origin) + ":current", "默认模型")
         yield event.plain_result(
+            f"下单时间：{umo_data.get('order_time', '未知')}\n"
+            f"赞助方案：{umo_data.get('plan_id', '未知')}\n"
             f"剩余天数：{umo_data['remaining_days']}\n"
             f"当前模型：{current}\n"
             f"到期时间：{umo_data.get('expire_time', '未知')}"
@@ -546,7 +567,9 @@ class AfdianModelPlugin(Star):
                             plan_id = order.get("plan_id", "")
                             plan_mapping = self._get_plan_mapping()
                             if plan_id in plan_mapping:
-                                logger.info(f"[AfdianModel] 轮询发现新订单: {out_trade_no}")
+                                logger.info(f"[AfdianModel] 轮询发现新订单: {out_trade_no} plan={plan_id}")
+                            else:
+                                logger.debug(f"[AfdianModel] 轮询订单{out_trade_no} plan={plan_id} 未配置，跳过")
                     if newest_found or page >= data.get("total_page", 1):
                         break
                     page += 1
