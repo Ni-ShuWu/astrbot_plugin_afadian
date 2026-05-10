@@ -18,41 +18,57 @@
 | `afdian_token`   | 爱发电 API Token                                             |
 | `model_list`     | 模型名称列表，一行一个                                               |
 
-## 管理员命令
+## 命令一览
 
-以下命令仅 AstrBot 管理员可用：
+### 📌 用户指令（仅私聊）
 
-| 命令                                             | 说明           |
-| ---------------------------------------------- | ------------ |
-| `/afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>` | 添加赞助方案映射     |
-| `/afdian_delplan <plan_id>`                    | 删除赞助方案       |
-| `/afdian_addadmin <群号> <QQ号>`                  | 添加群管理员（静态兜底） |
-| `/afdian_deladmin <群号> <QQ号>`                  | 移除群管理员       |
+| 命令 | 说明 |
+| --- | --- |
+| `/afdian_bind <订单号>` | 绑定爱发电订单号，获得模型使用权限 |
+| `/afdian_models` | 查看当前可用的模型列表 |
+| `/afdian_switch <模型名>` | 切换当前使用的模型 |
+| `/afdian_status` | 查看赞助权限状态（剩余天数、到期时间等） |
+| `/afdian_help` | 显示本帮助信息 |
 
-### 示例
+### 🔧 管理员指令
+
+| 命令 | 说明 |
+| --- | --- |
+| `/afdian_reset <订单号>` | 释放指定订单的绑定状态 |
+| `/afdian_reset_all YES` | ⚠️ 一键清除所有缓存和持久化数据（除插件配置外） |
+| `/afdian_query <订单号>` | 查询指定订单详情 |
+| `/afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>` | 添加赞助方案 |
+| `/afdian_delplan <plan_id>` | 删除赞助方案 |
+| `/afdian_addadmin <群号> <QQ号>` | 添加群管理员 |
+| `/afdian_deladmin <群号> <QQ号>` | 删除群管理员 |
+| `/afdian_getconfig` | 查看当前插件配置 |
+| `/afdian_setconfig <key> <value>` | 设置插件配置 |
+| `/afdian_migrateconfig` | 从 AstrBot 配置迁移 |
+
+### 📋 使用流程
+
+1. 在爱发电赞助并获取订单号
+2. 使用 `/afdian_bind <订单号>` 绑定
+3. 使用 `/afdian_models` 查看可用模型
+4. 使用 `/afdian_switch <模型名>` 切换模型
+
+### 群聊切换模型
+
+群聊中发送 `/afdian_switch <模型名>`，系统会先验证发送者是否为群主或群管：
+
+- 优先通过平台 API 查询角色（owner/admin）
+- 平台 API 不可用时使用静态管理员列表兜底
+- 非群管直接拒绝
+
+### 管理员命令示例
 
 ```
 /afdian_addplan plan_gpt4_30d 30 gpt-4o,gpt-4
 /afdian_addplan plan_claude_30d 30 claude-3
 /afdian_addadmin 123456789 10001
+/afdian_query 2025010100000001
+/afdian_setconfig model_list gpt-4o,claude-3.5-sonnet
 ```
-
-## 用户命令（仅私聊）
-
-| 命令                          | 说明               |
-| --------------------------- | ---------------- |
-| `/afdian_bind <订单号>`        | 绑定爱发电订单，获得模型权限   |
-| `/afdian_models`            | 查看当前可用的模型列表      |
-| `/afdian_switch <前缀> <模型名>` | 切换当前使用的模型        |
-| `/afdian_status`            | 查看剩余天数、当前模型、到期时间 |
-
-### 群聊切换模型
-
-群聊中发送 `/afdian_switch <前缀> <模型名>`，系统会先验证发送者是否为群主或群管：
-
-- 优先通过平台 API 查询角色（owner/admin）
-- 平台 API 不可用时使用静态管理员列表兜底
-- 非群管直接拒绝
 
 ## 订单处理流程
 
