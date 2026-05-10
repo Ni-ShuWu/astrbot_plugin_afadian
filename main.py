@@ -103,6 +103,11 @@ class AfdianModelPlugin(Star):
             uid = cfg.get("afdian_user_id", "")
             token = cfg.get("afdian_token", "")
             api_base = cfg.get("afdian_api_base", "https://afdian.net")
+            self._wire(
+                f"[AfdianModel] API配置检查: user_id={'***' if uid else 'EMPTY'} "
+                f"token={'***' if token else 'EMPTY'} base={api_base}",
+                "info"
+            )
             if not uid or not token:
                 self._wire(
                     f"[AfdianModel] API未配置: user_id={'***' if uid else 'EMPTY'} "
@@ -120,8 +125,11 @@ class AfdianModelPlugin(Star):
 
     def _config(self) -> dict:
         try:
-            return self.context.get_star_config() or {}
-        except Exception:
+            cfg = self.context.get_star_config() or {}
+            self._wire(f"[AfdianModel] 配置读取: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "debug")
+            return cfg
+        except Exception as e:
+            self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
             return {}
 
     def _load_processed_orders(self) -> set:
