@@ -129,16 +129,23 @@ class AfdianModelPlugin(Star):
     def _config(self) -> dict:
         try:
             # 尝试多种路径查找配置文件
-            data_parent_dir = os.path.dirname(DATA_DIR)
+            plugin_dir = os.path.dirname(DATA_DIR)  # /AstrBot/data/plugins/astrbot_plugin_afdian_model
+            astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))  # /AstrBot/data
+            astrbot_root_dir = os.path.dirname(astrbot_data_dir)  # /AstrBot
+            
             possible_paths = [
-                # AstrBot 标准配置路径
-                os.path.join(data_parent_dir, "config", "astrbot_plugin_afdian_model_config.json"),
+                # AstrBot 标准配置路径（根目录/config）
+                os.path.join(astrbot_root_dir, "config", "astrbot_plugin_afdian_model_config.json"),
+                # AstrBot data/config
+                os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json"),
                 # 尝试不带plugin前缀
-                os.path.join(data_parent_dir, "config", "afdian_model_config.json"),
+                os.path.join(astrbot_root_dir, "config", "afdian_model_config.json"),
+                os.path.join(astrbot_data_dir, "config", "afdian_model_config.json"),
                 # 尝试直接插件名
-                os.path.join(data_parent_dir, "config", "astrbot_plugin_afdian_model.json"),
+                os.path.join(astrbot_root_dir, "config", "astrbot_plugin_afdian_model.json"),
                 # 尝试在插件目录中查找
                 os.path.join(PLUGIN_DIR, "config.json"),
+                os.path.join(plugin_dir, "config.json"),
                 # 备用路径
                 os.path.join(DATA_DIR, "config", "astrbot_plugin_afdian_model_config.json"),
             ]
