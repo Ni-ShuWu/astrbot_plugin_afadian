@@ -584,11 +584,12 @@ class AfdianModelPlugin(Star):
                 self._wire(f"[AfdianModel] 每日零点定时任务异常: {e}", "error")
 
     async def _cron_poll(self):
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
         while True:
-            await asyncio.sleep(POLL_INTERVAL)
             api = self._get_api()
             if not api:
+                self._wire("[AfdianModel] Poll SKIP | API未配置，等待下次尝试", "warning")
+                await asyncio.sleep(POLL_INTERVAL)
                 continue
             try:
                 page = 1
@@ -609,16 +610,8 @@ class AfdianModelPlugin(Star):
                         if out_trade_no in self._processed_orders:
                             newest_found = True
                             break
-                        self._processed_orders.add(out_trade_no)
                         new_orders += 1
-                        self._save_processed_orders()
-                        if order.get("status") == 2:
-                            plan_id = order.get("plan_id", "")
-                            plan_mapping = self._get_plan_mapping()
-                            if plan_id in plan_mapping:
-                                self._wire(f"[AfdianModel] 轮询发现新订单: {out_trade_no} plan={plan_id}")
-                            else:
-                                self._wire(f"[AfdianModel] 轮询订单{out_trade_no} plan={plan_id} 未配置，跳过", "debug")
+                        await self._process_single_order(order)
                     if newest_found:
                         break
                     if page >= data.get("total_page", 1):
@@ -631,6 +624,7 @@ class AfdianModelPlugin(Star):
                 )
             except Exception as e:
                 self._wire(f"[AfdianModel] 定时轮询异常: {e}", "error")
+            await asyncio.sleep(POLL_INTERVAL)
 
     @staticmethod
     def _seconds_until_next_hour(hour: int) -> float:
