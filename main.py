@@ -8,14 +8,14 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core import sp
 
-from afdian_api import AfdianAPI
-from config import ConfigManager
-from storage import StorageManager
-from plan_manager import PlanManager
-from user_manager import UserManager
-from commands_user import UserCommands
-from commands_admin import AdminCommands
-from cron_tasks import CronTasks
+from .afdian_api import AfdianAPI
+from .config import ConfigManager
+from .storage import StorageManager
+from .plan_manager import PlanManager
+from .user_manager import UserManager
+from .commands_user import UserCommands
+from .commands_admin import AdminCommands
+from .cron_tasks import CronTasks
 
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))

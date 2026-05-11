@@ -1,10 +1,7 @@
 import os
-from astrbot.api.event import AstrMessageEvent
-from astrbot.core import sp
-from afdian_api import AfdianAPI
-from config import ConfigManager
-from storage import StorageManager
-from plan_manager import PlanManager
+from .config import ConfigManager
+from .storage import StorageManager
+from .plan_manager import PlanManager
 
 
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
@@ -31,7 +28,7 @@ class AdminCommands:
         self._plan_manager = plan_manager
         self._wire = wire_fn
 
-    async def cmd_reset(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_reset(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -82,6 +79,7 @@ class AdminCommands:
 
         umo_key = self._storage.get_user_mapping(user_id)
         if umo_key:
+            from astrbot.core import sp
             umo_data = sp.get(umo_key, {})
             if umo_data:
                 used_orders = umo_data.get("used_orders", [])
@@ -101,7 +99,7 @@ class AdminCommands:
         self._wire(f"[AfdianModel] 订单重置成功: order={order_no} user={user_id}")
         yield event.plain_result(f"订单 {order_no} 已重置，绑定信息已销毁，可以重新绑定")
 
-    async def cmd_reset_all(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_reset_all(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -125,6 +123,7 @@ class AdminCommands:
             )
             return
 
+        from astrbot.core import sp
         active_umos = sp.get(SP_ACTIVE_UMOS, [])
         for umo_key in active_umos:
             sp.put(umo_key, None)
@@ -147,7 +146,7 @@ class AdminCommands:
             f"插件配置已保留，可正常使用。"
         )
 
-    async def cmd_addmodels(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_addmodels(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -189,6 +188,7 @@ class AdminCommands:
 
         plan_id = cfg.get(f"plan_id_{level}", "")
 
+        from astrbot.core import sp
         updated_users = 0
         active_umos = sp.get(SP_ACTIVE_UMOS, [])
         for umo_key in active_umos:
@@ -209,7 +209,7 @@ class AdminCommands:
             (f"\n\n已同步到 {updated_users} 个已绑定用户" if updated_users > 0 else "")
         )
 
-    async def cmd_addplan(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_addplan(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -231,13 +231,14 @@ class AdminCommands:
             yield event.plain_result("至少需要一个模型前缀")
             return
 
-        from plan_manager import SP_PLAN_MAPPING
+        from .plan_manager import SP_PLAN_MAPPING
+        from astrbot.core import sp
         mapping = sp.get(SP_PLAN_MAPPING, {})
         mapping[plan_id] = {"days": days, "prefixes": self._plan_manager._list_to_str(prefixes)}
         sp.put(SP_PLAN_MAPPING, mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
-    async def cmd_delplan(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_delplan(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -248,7 +249,8 @@ class AdminCommands:
             return
         
         plan_id = parts[1]
-        from plan_manager import SP_PLAN_MAPPING
+        from .plan_manager import SP_PLAN_MAPPING
+        from astrbot.core import sp
         mapping = sp.get(SP_PLAN_MAPPING, {})
         auto_key = f"_auto_{plan_id}"
         deleted = False
@@ -264,7 +266,7 @@ class AdminCommands:
         else:
             yield event.plain_result("方案不存在")
 
-    async def cmd_query(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_query(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -328,7 +330,7 @@ class AdminCommands:
             f"{plan_info}"
         )
 
-    async def cmd_getconfig(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_getconfig(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -345,7 +347,7 @@ class AdminCommands:
             config_lines.append(f"{k}: {v}")
         yield event.plain_result("当前配置:\n" + "\n".join(config_lines))
 
-    async def cmd_setconfig(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_setconfig(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return
@@ -372,7 +374,7 @@ class AdminCommands:
         self._config_manager.save_plugin_config(cfg)
         yield event.plain_result(f"配置已更新: {key} = {value if 'token' not in key.lower() else '***'}")
 
-    async def cmd_migrateconfig(self, event: AstrMessageEvent, is_admin_fn):
+    async def cmd_migrateconfig(self, event, is_admin_fn):
         if not await is_admin_fn(event):
             yield event.plain_result("无权限")
             return

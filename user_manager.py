@@ -1,8 +1,8 @@
 import json
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from storage import StorageManager
-from plan_manager import PlanManager
+from .storage import StorageManager
+from .plan_manager import PlanManager
 
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
 SP_UMO_PREFIX = "afdian_model:umo:"
