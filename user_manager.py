@@ -51,11 +51,16 @@ class UserManager:
             existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
             combined_prefixes = list(set(existing_prefixes + prefixes))
             umo_data["prefixes"] = self._storage._list_to_str(combined_prefixes)
+            current_level = umo_data.get("level", "1")
+            new_level = plan.get("level", "1")
+            if (new_level == "2" or (new_level == "1" and current_level == "2")):
+                umo_data["level"] = new_level
         else:
             umo_data = {
                 "remaining_days": days, 
                 "prefixes": self._storage._list_to_str(prefixes), 
                 "plan_id": plan_id, 
+                "level": plan.get("level", "1"),
                 "used_orders": []
             }
 
@@ -83,10 +88,31 @@ class UserManager:
     def has_model_permission(self, umo_data, model_name: str) -> tuple[bool, list]:
         if not umo_data:
             return False, []
+        
         prefixes = umo_data.get("prefixes", [])
-        has_permission = False
+        
         for p in prefixes:
             if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                has_permission = True
-                break
-        return has_permission, prefixes
+                return True, prefixes
+        
+        user_level = umo_data.get("level", "1")
+        if user_level == "2":
+            level_1_prefixes = self._get_level_1_prefixes()
+            if level_1_prefixes:
+                for p in level_1_prefixes:
+                    if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
+                        return True, level_1_prefixes
+        
+        return False, prefixes
+    
+    def _get_level_1_prefixes(self) -> list:
+        try:
+            from .plan_manager import PlanManager
+            config_fn = getattr(self._plan_manager, '_config_fn', None)
+            if config_fn:
+                cfg = config_fn()
+                level_1_prefixes = PlanManager._parse_models(cfg.get("models_1", ""))
+                return level_1_prefixes
+        except Exception:
+            pass
+        return []
