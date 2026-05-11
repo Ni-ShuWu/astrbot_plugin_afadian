@@ -14,9 +14,9 @@ from astrbot.core.provider.entities import ProviderType
 
 POLL_INTERVAL = 1 * 3600
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
-SP_GROUP_ADMINS = "afdian_model:group_admins"
 SP_ACTIVE_UMOS = "afdian_model:active_umos"
 SP_UMO_PREFIX = "afdian_model:umo:"
+SP_BY_AFDIAN = "afdian_model:by_afdian:"
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
@@ -296,13 +296,6 @@ class AfdianModelPlugin(Star):
         except Exception as e:
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
-    def _get_group_admins(self) -> dict:
-        admins = sp.get(SP_GROUP_ADMINS, {})
-        result = {}
-        for group_id, admin_str in admins.items():
-            result[group_id] = self._str_to_list(admin_str)
-        return result
-
     def _umo_key(self, umo) -> str:
         return f"{SP_UMO_PREFIX}{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"
 
@@ -332,7 +325,8 @@ class AfdianModelPlugin(Star):
                 matched.append(m)
         return matched
 
-    async def _check_group_admin(self, event: AstrMessageEvent) -> bool:
+    async def _is_group_admin(self, event: AstrMessageEvent) -> bool:
+        """检查用户是否为QQ群群主或群管理员"""
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         if not group_id:
@@ -344,10 +338,8 @@ class AfdianModelPlugin(Star):
                 if info and info.get("role") in ("owner", "admin"):
                     return True
         except Exception as e:
-            self._wire(f"[AfdianModel] 平台API获取群角色失败，使用静态列表兜底: {e}", "debug")
-        group_admins = self._get_group_admins()
-        allowed = group_admins.get(str(group_id), [])
-        return str(sender_id) in allowed
+            self._wire(f"[AfdianModel] 平台API获取群角色失败: {e}", "warning")
+        return False
 
     def _register_umo(self, umo_key: str):
         active = sp.get(SP_ACTIVE_UMOS, [])
@@ -391,7 +383,7 @@ class AfdianModelPlugin(Star):
         user_id = order.get("user_id", "")
 
         # 检查用户是否已经通过其他方式绑定（比如手动绑定）
-        existing = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        existing = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
         umo_key = existing if existing else None
         if umo_key:
             umo_data = sp.get(umo_key, {})
@@ -472,7 +464,7 @@ class AfdianModelPlugin(Star):
         )
         self._set_umo_data(umo, umo_data)
         self._register_umo(umo_key)
-        sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", umo_key)
+        sp.put(f"{SP_BY_AFDIAN}{user_id}", umo_key)
         return umo_data
 
     # ==================== 用户命令 ====================
@@ -496,8 +488,6 @@ class AfdianModelPlugin(Star):
 • `/afdian_addmodels <方案等级> <模型名>` - 向方案添加模型
 • `/afdian_addplan <plan_id> <天数> <前缀>` - 添加赞助方案
 • `/afdian_delplan <plan_id>` - 删除赞助方案
-• `/afdian_addadmin <群号> <QQ号>` - 添加群管理员
-• `/afdian_deladmin <群号> <QQ号>` - 删除群管理员
 • `/afdian_getconfig` - 查看当前插件配置
 • `/afdian_setconfig <key> <value>` - 设置插件配置
 • `/afdian_migrateconfig` - 从 AstrBot 配置迁移
@@ -579,7 +569,7 @@ class AfdianModelPlugin(Star):
         
         # 检查用户是否已经有这个订单
         user_id = order.get("user_id", "")
-        existing_umo_key = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        existing_umo_key = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
         if existing_umo_key:
             existing_data = sp.get(existing_umo_key, {})
             if existing_data:
@@ -636,7 +626,7 @@ class AfdianModelPlugin(Star):
 
     @filter.command("afdian_switch")
     async def cmd_switch(self, event: AstrMessageEvent):
-        """切换当前使用的LLM模型，私聊切换个人模型，群聊切换全群模型（需群管权限）"""
+        """切换当前使用的LLM模型，私聊切换个人模型，群聊需群管+爱发电赞助者权限"""
         parts = event.message_str.strip().split(maxsplit=1)
         if len(parts) < 2:
             yield event.plain_result("用法: /afdian_switch <模型名>\n例如: /afdian_switch openai/gpt-5.4-mini-2026-03-17")
@@ -645,11 +635,28 @@ class AfdianModelPlugin(Star):
         group_id = event.get_group_id()
 
         if group_id:
-            is_admin = await self._check_group_admin(event)
+            is_admin = await self._is_group_admin(event)
             if not is_admin:
                 yield event.plain_result("仅群主或群管可切换群模型")
                 return
+
             umo = event.unified_msg_origin
+            umo_data = self._get_umo_data(umo)
+            if not umo_data:
+                yield event.plain_result("你不是爱发电赞助者，无法切换群模型")
+                return
+
+            prefixes = umo_data.get("prefixes", [])
+            has_permission = False
+            for p in prefixes:
+                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
+                    has_permission = True
+                    break
+            if not has_permission:
+                model_lines = [f"{i}. {m}" for i, m in enumerate(prefixes, 1)]
+                available = "\n".join(model_lines) if model_lines else "无"
+                yield event.plain_result(f"无此模型的使用权限\n\n**可用模型：**\n{available}")
+                return
         else:
             umo = event.unified_msg_origin
             umo_data = self._get_umo_data(umo)
@@ -758,7 +765,7 @@ class AfdianModelPlugin(Star):
         user_id = found.get("user_id", "")
         
         # 查找并处理用户数据
-        umo_key = sp.get(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+        umo_key = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
         if umo_key:
             umo_data = sp.get(umo_key, {})
             if umo_data:
@@ -776,7 +783,7 @@ class AfdianModelPlugin(Star):
                     # 从活跃列表移除
                     self._unregister_umo(umo_key)
                     # 删除用户映射
-                    sp.put(f"{SP_UMO_PREFIX}by_afdian:{user_id}", None)
+                    sp.put(f"{SP_BY_AFDIAN}{user_id}", None)
                     self._wire(f"[AfdianModel] 用户数据已销毁: {user_id}")
         
         # 从已处理订单中移除
@@ -802,8 +809,7 @@ class AfdianModelPlugin(Star):
                 "包括：\n"
                 "• 所有已绑定的订单\n"
                 "• 所有用户的赞助信息\n"
-                "• 所有活跃绑定记录\n"
-                "• 群管理员设置\n\n"
+                "• 所有活跃绑定记录\n\n"
                 "**不会清除**：\n"
                 "• 插件配置文件\n\n"
                 "如需执行，请输入：\n"
@@ -821,8 +827,6 @@ class AfdianModelPlugin(Star):
         for key in user_keys:
             sp.put(key, None)
         
-        sp.put(SP_GROUP_ADMINS, {})
-        
         self._processed_orders.clear()
         self._save_processed_orders()
         
@@ -838,7 +842,6 @@ class AfdianModelPlugin(Star):
             f"已清除：\n"
             f"• {len(active_umos)} 个活跃绑定\n"
             f"• {len(user_keys)} 个用户数据\n"
-            f"• 群管理员设置\n"
             f"• 已处理订单记录\n\n"
             f"插件配置已保留，可正常使用。"
         )
@@ -960,53 +963,6 @@ class AfdianModelPlugin(Star):
             yield event.plain_result(f"方案已删除: {plan_id}")
         else:
             yield event.plain_result("方案不存在")
-
-    @filter.command("afdian_addadmin")
-    async def cmd_addadmin(self, event: AstrMessageEvent):
-        """添加群管理员（静态兜底列表）"""
-        if not await self._check_admin(event):
-            yield event.plain_result("无权限")
-            return
-        parts = event.message_str.strip().split()
-        if len(parts) != 3:
-            yield event.plain_result("用法: /afdian_addadmin <群号> <QQ号>")
-            return
-        group_id = parts[1]
-        qq = parts[2]
-        # 获取原始的 admins 数据
-        admins = sp.get(SP_GROUP_ADMINS, {})
-        admin_list = self._str_to_list(admins.get(group_id, ""))
-        if qq not in admin_list:
-            admin_list.append(qq)
-        admins[group_id] = self._list_to_str(admin_list)
-        sp.put(SP_GROUP_ADMINS, admins)
-        yield event.plain_result(f"已添加群{group_id}的管理员: {qq}")
-
-    @filter.command("afdian_deladmin")
-    async def cmd_deladmin(self, event: AstrMessageEvent):
-        """移除群管理员"""
-        if not await self._check_admin(event):
-            yield event.plain_result("无权限")
-            return
-        parts = event.message_str.strip().split()
-        if len(parts) != 3:
-            yield event.plain_result("用法: /afdian_deladmin <群号> <QQ号>")
-            return
-        group_id = parts[1]
-        qq = parts[2]
-        # 获取原始的 admins 数据
-        admins = sp.get(SP_GROUP_ADMINS, {})
-        admin_list = self._str_to_list(admins.get(group_id, ""))
-        if qq in admin_list:
-            admin_list.remove(qq)
-            if not admin_list:
-                del admins[group_id]
-            else:
-                admins[group_id] = self._list_to_str(admin_list)
-            sp.put(SP_GROUP_ADMINS, admins)
-            yield event.plain_result(f"已移除群{group_id}的管理员: {qq}")
-        else:
-            yield event.plain_result("管理员不存在")
 
     @filter.command("afdian_query")
     async def cmd_query(self, event: AstrMessageEvent):
