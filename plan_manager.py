@@ -1,5 +1,5 @@
 from astrbot.core import sp
-from storage import StorageManager
+from .storage import StorageManager
 
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
 

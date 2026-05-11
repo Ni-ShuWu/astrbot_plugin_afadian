@@ -1,9 +1,8 @@
-from astrbot.api.event import AstrMessageEvent
-from afdian_api import AfdianAPI
-from config import ConfigManager
-from storage import StorageManager
-from plan_manager import PlanManager
-from user_manager import UserManager
+from .afdian_api import AfdianAPI
+from .config import ConfigManager
+from .storage import StorageManager
+from .plan_manager import PlanManager
+from .user_manager import UserManager
 
 
 class UserCommands:
@@ -25,7 +24,7 @@ class UserCommands:
         self._user_manager = user_manager
         self._wire = wire_fn
 
-    async def cmd_help(self, event: AstrMessageEvent):
+    async def cmd_help(self, event):
         help_text = """**🤖 爱发电赞助插件 - 使用指南**
 
 **📌 用户指令:**
@@ -53,7 +52,7 @@ class UserCommands:
 4. 使用 /afdian_switch <模型名> 切换模型"""
         yield event.plain_result(help_text)
 
-    async def cmd_bind(self, event: AstrMessageEvent):
+    async def cmd_bind(self, event):
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
@@ -156,7 +155,7 @@ class UserCommands:
             f"• 使用 /afdian_status 查看赞助状态"
         )
 
-    async def cmd_models(self, event: AstrMessageEvent):
+    async def cmd_models(self, event):
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
@@ -176,8 +175,8 @@ class UserCommands:
         result += f"\n\n💡 提示：使用 /afdian_switch <模型名> 切换模型"
         yield event.plain_result(result)
 
-    async def cmd_switch(self, event: AstrMessageEvent, is_admin_fn):
-        from astrbot.core.provider.entities import ProviderType
+    async def cmd_switch(self, event, is_admin_fn):
+        from . import main as main_module
 
         parts = event.message_str.strip().split(maxsplit=1)
         if len(parts) < 2:
@@ -220,6 +219,7 @@ class UserCommands:
                 return
 
         try:
+            from astrbot.core.provider.entities import ProviderType
             context = event._message_context
             await context.provider_manager.set_provider(
                 model_name, ProviderType.CHAT_COMPLETION, umo
@@ -240,7 +240,7 @@ class UserCommands:
         self._storage.set_current_model(umo, model_name)
         yield event.plain_result(f"已切换至 {model_name}")
 
-    async def cmd_status(self, event: AstrMessageEvent):
+    async def cmd_status(self, event):
         if event.get_group_id():
             yield event.plain_result("请在私聊中使用此命令")
             return
@@ -259,7 +259,7 @@ class UserCommands:
             f"到期时间：{umo_data.get('expire_time', '未知')}"
         )
 
-    async def _is_group_admin(self, event: AstrMessageEvent) -> bool:
+    async def _is_group_admin(self, event) -> bool:
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         if not group_id:
