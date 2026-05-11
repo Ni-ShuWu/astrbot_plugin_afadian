@@ -88,31 +88,33 @@ class UserManager:
     def has_model_permission(self, umo_data, model_name: str) -> tuple[bool, list]:
         if not umo_data:
             return False, []
-        
-        prefixes = umo_data.get("prefixes", [])
-        
-        for p in prefixes:
+
+        user_prefixes = umo_data.get("prefixes", [])
+        for p in user_prefixes:
             if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                return True, prefixes
-        
+                return True, user_prefixes
+
         user_level = umo_data.get("level", "1")
         if user_level == "2":
             level_1_prefixes = self._get_level_1_prefixes()
             if level_1_prefixes:
                 for p in level_1_prefixes:
                     if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                        return True, level_1_prefixes
-        
-        return False, prefixes
+                        combined = list(set(user_prefixes + level_1_prefixes))
+                        return True, combined
+
+        return False, user_prefixes
     
     def _get_level_1_prefixes(self) -> list:
         try:
-            from .plan_manager import PlanManager
             config_fn = getattr(self._plan_manager, '_config_fn', None)
-            if config_fn:
+            if config_fn and callable(config_fn):
                 cfg = config_fn()
-                level_1_prefixes = PlanManager._parse_models(cfg.get("models_1", ""))
+                self._wire(f"[AfdianModel] _get_level_1_prefixes 读取配置: models_1={cfg.get('models_1', '')}", "info")
+                level_1_prefixes = self._plan_manager._parse_models(cfg.get("models_1", ""))
                 return level_1_prefixes
-        except Exception:
-            pass
+            else:
+                self._wire("[AfdianModel] _get_level_1_prefixes: config_fn 不可用", "warning")
+        except Exception as e:
+            self._wire(f"[AfdianModel] _get_level_1_prefixes 获取Lv1模型失败: {e}", "error")
         return []
