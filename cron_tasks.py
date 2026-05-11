@@ -2,10 +2,8 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from astrbot.api import logger
-from afdian_api import AfdianAPI
-from storage import StorageManager
-from plan_manager import PlanManager
+from .storage import StorageManager
+from .plan_manager import PlanManager
 
 
 POLL_INTERVAL = 1 * 3600
@@ -60,20 +58,8 @@ class CronTasks:
                                 umo = __import__('json').loads(key.replace(SP_UMO_PREFIX, ""))
                                 try:
                                     from astrbot.core.provider.entities import ProviderType
-                                    context = None
-                                    try:
-                                        pass
-                                    except ImportError:
-                                        pass
-                                except Exception:
-                                    try:
-                                        await sp.session_put(
-                                            umo,
-                                            "provider_perf_chat_completion",
-                                            default_provider,
-                                        )
-                                    except Exception:
-                                        pass
+                                except ImportError:
+                                    pass
                             except Exception:
                                 pass
                         sp.put(key, None)
