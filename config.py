@@ -27,8 +27,10 @@ class ConfigManager:
     def save_plugin_config(self, cfg: dict):
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(PLUGIN_CONFIG_PATH, "w", encoding="utf-8") as f:
+            tmp_path = PLUGIN_CONFIG_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, PLUGIN_CONFIG_PATH)
             self._wire(f"[AfdianModel] 插件配置保存成功: {list(cfg.keys())}", "info")
         except Exception as e:
             self._wire(f"[AfdianModel] 插件配置保存失败: {e}", "error")

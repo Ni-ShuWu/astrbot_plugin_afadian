@@ -1,7 +1,5 @@
 from astrbot.core import sp
-from .storage import StorageManager
-
-SP_PLAN_MAPPING = "afdian_model:plan_mapping"
+from .storage import StorageManager, SP_PLAN_MAPPING
 
 
 class PlanManager:
@@ -34,6 +32,7 @@ class PlanManager:
             self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
         if updated:
             sp.put(SP_PLAN_MAPPING, existing)
+            self._storage._dump_state()
 
     def get_plan_mapping(self) -> dict:
         mapping = sp.get(SP_PLAN_MAPPING, {})

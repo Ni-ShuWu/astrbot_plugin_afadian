@@ -1,12 +1,8 @@
 import json
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from .storage import StorageManager
+from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
 from .plan_manager import PlanManager
-
-SP_ACTIVE_UMOS = "afdian_model:active_umos"
-SP_UMO_PREFIX = "afdian_model:umo:"
-SP_BY_AFDIAN = "afdian_model:by_afdian:"
 
 
 class UserManager:
@@ -76,7 +72,7 @@ class UserManager:
         )
         self._storage.set_umo_data(umo, umo_data)
         self._storage.register_umo(umo_key)
-        sp.put(f"{SP_BY_AFDIAN}{user_id}", umo_key)
+        self._storage.set_user_mapping(user_id, umo_key)
         return umo_data
 
     def get_model_list(self, config_fn) -> list:

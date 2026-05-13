@@ -2,14 +2,11 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from .storage import StorageManager
+from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
 from .plan_manager import PlanManager
 
 
 POLL_INTERVAL = 1 * 3600
-SP_ACTIVE_UMOS = "afdian_model:active_umos"
-SP_UMO_PREFIX = "afdian_model:umo:"
-SP_BY_AFDIAN = "afdian_model:by_afdian:"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
 
@@ -74,6 +71,7 @@ class CronTasks:
                     if key in active_umos:
                         active_umos.remove(key)
                 sp.put(SP_ACTIVE_UMOS, active_umos)
+                self._storage.persist()
                 remaining = len(active_umos)
                 self._wire(
                     f"[AfdianModel] Daily OK | Bindings: {total} -> {remaining} | "
@@ -146,6 +144,7 @@ class CronTasks:
                 used_orders.append(out_trade_no)
                 umo_data["used_orders"] = used_orders
                 sp.put(umo_key, umo_data)
+                self._storage.persist()
                 self._wire(
                     f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
                     f"订单{order.get('out_trade_no','')} 下单时间"

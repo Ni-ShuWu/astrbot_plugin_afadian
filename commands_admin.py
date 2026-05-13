@@ -1,13 +1,8 @@
 import asyncio
 import os
 from .config import ConfigManager
-from .storage import StorageManager
+from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
 from .plan_manager import PlanManager
-
-
-SP_ACTIVE_UMOS = "afdian_model:active_umos"
-SP_UMO_PREFIX = "afdian_model:umo:"
-SP_BY_AFDIAN = "afdian_model:by_afdian:"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PLUGIN_DIR, "data")
 
@@ -88,6 +83,7 @@ class AdminCommands:
                     used_orders.remove(order_no)
                     umo_data["used_orders"] = used_orders
                     sp.put(umo_key, umo_data)
+                    self._storage.persist()
                     self._wire(f"[AfdianModel] 从用户数据中移除订单: {order_no}")
                 if not used_orders:
                     sp.put(umo_key, None)
@@ -129,11 +125,13 @@ class AdminCommands:
         for umo_key in active_umos:
             sp.put(umo_key, None)
         sp.put(SP_ACTIVE_UMOS, [])
+        self._storage.persist()
 
         all_keys = sp.keys()
         user_keys = [k for k in all_keys if k.startswith(SP_UMO_PREFIX)]
         for key in user_keys:
             sp.put(key, None)
+        self._storage.persist()
 
         self._storage.clear_orders()
 
@@ -241,6 +239,7 @@ class AdminCommands:
                         existing_prefixes.append(mn)
                 umo_data["prefixes"] = self._plan_manager._list_to_str(existing_prefixes)
                 sp.put(umo_key, umo_data)
+                self._storage.persist()
                 updated_users += 1
 
         for mn in added:
@@ -411,6 +410,7 @@ class AdminCommands:
             if updated:
                 umo_data["prefixes"] = self._plan_manager._list_to_str(prefixes)
                 sp.put(umo_key, umo_data)
+                self._storage.persist()
                 user_updates += 1
 
         for mn, removed in per_model.items():
@@ -448,11 +448,9 @@ class AdminCommands:
             yield event.plain_result("至少需要一个模型前缀")
             return
 
-        from .plan_manager import SP_PLAN_MAPPING
-        from astrbot.core import sp
-        mapping = sp.get(SP_PLAN_MAPPING, {})
+        mapping = self._storage.get_plan_mapping()
         mapping[plan_id] = {"days": days, "prefixes": self._plan_manager._list_to_str(prefixes)}
-        sp.put(SP_PLAN_MAPPING, mapping)
+        self._storage.set_plan_mapping(mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
     async def cmd_delplan(self, event, is_admin_fn):
@@ -466,9 +464,7 @@ class AdminCommands:
             return
         
         plan_id = parts[1]
-        from .plan_manager import SP_PLAN_MAPPING
-        from astrbot.core import sp
-        mapping = sp.get(SP_PLAN_MAPPING, {})
+        mapping = self._storage.get_plan_mapping()
         auto_key = f"_auto_{plan_id}"
         deleted = False
         if plan_id in mapping:
@@ -478,7 +474,7 @@ class AdminCommands:
             del mapping[auto_key]
             deleted = True
         if deleted:
-            sp.put(SP_PLAN_MAPPING, mapping)
+            self._storage.set_plan_mapping(mapping)
             yield event.plain_result(f"方案已删除: {plan_id}")
         else:
             yield event.plain_result("方案不存在")
