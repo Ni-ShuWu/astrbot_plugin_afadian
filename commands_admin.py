@@ -5,6 +5,9 @@ from .config import ConfigManager
 from .storage import StorageManager, SP_UMO_PREFIX
 from .plan_manager import PlanManager
 
+# 模型编号映射
+LEVEL_ID_PREFIX = {"0": "zero", "1": "one", "2": "two"}
+
 
 
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -193,9 +196,12 @@ class AdminCommands:
             for mn in added:
                 self._wire(f"[AfdianModel] 公开模型添加: {mn}")
             self._wire(f"[AfdianModel] 热同步: 公开模型列表已更新")
-            msg = f"✅ 已向公开模型列表添加 {len(added)} 个模型:\n"
+            # 计算新模型的编号（在所有模型中定位）
+            indexed = []
             for mn in added:
-                msg += f"  • `{mn}`\n"
+                idx = model_list.index(mn)
+                indexed.append(f"  • `[zero_{idx + 1}]` {mn}")
+            msg = f"✅ 已向公开模型列表添加 {len(added)} 个模型:\n" + "\n".join(indexed)
             msg += f"\n当前公开模型共 {len(model_list)} 个"
             if skipped:
                 msg += f"\n已跳过(已存在): {', '.join(skipped)}"
@@ -244,9 +250,13 @@ class AdminCommands:
             self._wire(f"[AfdianModel] 方案{level}添加模型: {mn}")
         self._wire(f"[AfdianModel] 热同步完成: config→plan_mapping→{updated_users}用户")
 
-        msg = f"✅ 已向方案{level}添加 {len(added)} 个模型:\n"
+        # 计算新模型的编号
+        lvl_name = LEVEL_ID_PREFIX.get(level, "lv")
+        indexed = []
         for mn in added:
-            msg += f"  • `{mn}`\n"
+            idx = current_list.index(mn)
+            indexed.append(f"  • `[{lvl_name}_{idx + 1}]` {mn}")
+        msg = f"✅ 已向方案{level}添加 {len(added)} 个模型:\n" + "\n".join(indexed)
         if plan_id:
             msg += f"\n方案ID: {plan_id}"
         msg += f"\n已热同步更新 {updated_users} 个活跃用户"

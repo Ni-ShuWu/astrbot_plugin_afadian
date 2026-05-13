@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 from datetime import datetime, timedelta
 from astrbot.core import sp
 from .storage import StorageManager, SP_UMO_PREFIX
@@ -24,56 +25,129 @@ class CronTasks:
         self._plan_manager = plan_manager
         self._wire = wire_fn
 
+    def _migrate_data(self, data: dict) -> dict:
+        """迁移旧数据到新的分级存储格式"""
+        if not data or not isinstance(data, dict):
+            return data
+        if "l1_days" not in data and "l2_days" not in data:
+            old_level = data.get("level", "1")
+            old_days = data.get("remaining_days", 0)
+            if old_level == "2":
+                data["l2_days"] = old_days
+                data["l1_days"] = 0
+            else:
+                data["l1_days"] = old_days
+                data["l2_days"] = 0
+            data["active_level"] = old_level
+            self._wire(f"[AfdianModel] Cron迁移: lv={old_level} days={old_days}")
+        if "active_level" not in data:
+            if data.get("l2_days", 0) > 0:
+                data["active_level"] = "2"
+            else:
+                data["active_level"] = data.get("level", "1")
+        data["remaining_days"] = data.get("l1_days", 0) + data.get("l2_days", 0)
+        return data
+
     async def _cron_daily(self):
         while True:
             await asyncio.sleep(self._seconds_until_next_hour(0))
             try:
                 active_umos = self._storage.get_active_umos()
-                total = len(active_umos)
                 if not active_umos:
                     self._wire("[AfdianModel] Daily OK | Bindings: 0 active, nothing to do")
                     continue
-                now = datetime.now()
+                total = len(active_umos)
                 expired = 0
+                level_switched = 0
                 for key in list(active_umos):
                     data = self._storage.get_umo_data_by_key(key)
                     if not data or not isinstance(data, dict):
                         self._storage.remove_umo_by_key(key)
                         self._storage.unregister_umo(key)
-                        continue
-                    days = data.get("remaining_days", 0)
-                    if days <= 0:
-                        self._storage.remove_umo_by_key(key)
-                        self._storage.unregister_umo(key)
-                        continue
-                    days -= 1
-                    if days <= 0:
-                        self._wire(f"[AfdianModel] UMO{key}权限到期，清除绑定")
-                        current_key = key + ":current"
-                        default_provider = sp.get("curr_provider", "")
-                        if sp.get(current_key) and default_provider:
-                            try:
-                                umo = __import__('json').loads(key.replace(SP_UMO_PREFIX, ""))
-                                try:
-                                    from astrbot.core.provider.entities import ProviderType
-                                except ImportError:
-                                    pass
-                            except Exception:
-                                pass
-                        self._storage.remove_umo_by_key(key)
-                        self._storage.unregister_umo(key)
                         expired += 1
-                    else:
-                        data["remaining_days"] = days
-                        data["expire_time"] = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                        continue
+
+                    data = self._migrate_data(data)
+                    active_level = data.get("active_level", "1")
+                    l1_days = data.get("l1_days", 0)
+                    l2_days = data.get("l2_days", 0)
+
+                    # 先消耗 active_level 的天数
+                    if active_level == "2":
+                        if l2_days <= 0:
+                            # Lv2 已耗尽，检查是否有 Lv1
+                            if l1_days > 0:
+                                data["active_level"] = "1"
+                                data["level"] = "1"
+                                level_switched += 1
+                                self._wire(f"[AfdianModel] UMO{key} Lv2耗尽，切换至Lv1(剩余{l1_days}天)")
+                                # 切换到 Lv1 后继续消耗 Lv1
+                                l2_days = 0
+                                l1_days -= 1
+                                data["l1_days"] = l1_days
+                            else:
+                                # 全部耗尽
+                                self._wire(f"[AfdianModel] UMO{key} 全部权限到期，清除绑定")
+                                self._cleanup_expired(key)
+                                expired += 1
+                                continue
+                        else:
+                            l2_days -= 1
+                            data["l2_days"] = l2_days
+                    elif active_level == "1":
+                        if l1_days <= 0:
+                            self._wire(f"[AfdianModel] UMO{key} Lv1权限到期，清除绑定")
+                            self._cleanup_expired(key)
+                            expired += 1
+                            continue
+                        else:
+                            l1_days -= 1
+                            data["l1_days"] = l1_days
+
+                    # 更新总剩余天数
+                    data["remaining_days"] = data.get("l1_days", 0) + data.get("l2_days", 0)
+
+                    # 更新到期时间
+                    if data["remaining_days"] > 0:
+                        data["expire_time"] = (datetime.now() + timedelta(days=data["remaining_days"])).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        )
                         self._storage.set_umo_data_by_key(key, data)
-                remaining = len(self._storage.get_active_umos())
+                    else:
+                        self._cleanup_expired(key)
+                        expired += 1
+
+                switched_info = f" | Switched: {level_switched}" if level_switched > 0 else ""
                 self._wire(
-                    f"[AfdianModel] Daily OK | Bindings: {total} -> {remaining} | "
-                    f"Expired: {expired} cleaned"
+                    f"[AfdianModel] Daily OK | Bindings: {total} active | "
+                    f"Expired: {expired}{switched_info}"
                 )
             except Exception as e:
                 self._wire(f"[AfdianModel] 每日零点定时任务异常: {e}", "error")
+
+    def _cleanup_expired(self, key: str):
+        """清除过期用户的绑定"""
+        self._storage.remove_umo_by_key(key)
+        self._storage.unregister_umo(key)
+        current_key = key + ":current"
+        default_provider = sp.get("curr_provider", "")
+        if sp.get(current_key) and default_provider:
+            try:
+                umo = json.loads(key.replace(SP_UMO_PREFIX, ""))
+                try:
+                    import asyncio as _asyncio
+                    async def _restore():
+                        from astrbot.core.provider.entities import ProviderType
+                        context = sp.get("_context")
+                        if context:
+                            await context.provider_manager.set_provider(
+                                default_provider, ProviderType.CHAT_COMPLETION, umo
+                            )
+                    _asyncio.create_task(_restore())
+                except Exception:
+                    sp.put(current_key, default_provider)
+            except Exception:
+                pass
 
     async def _cron_poll(self):
         await asyncio.sleep(5)
@@ -126,10 +200,20 @@ class CronTasks:
         if umo_key:
             umo_data = sp.get(umo_key, {})
             if umo_data:
+                umo_data = self._migrate_data(umo_data)
                 used_orders = umo_data.get("used_orders", [])
                 if out_trade_no in used_orders:
                     return
-                umo_data["remaining_days"] += days
+                # 确定该 plan 对应等级（通过前缀推断）
+                plan_level = self._infer_plan_level(prefixes)
+                if plan_level == "2":
+                    umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
+                    umo_data["active_level"] = "2"
+                else:
+                    umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
+                    if umo_data.get("active_level", "0") != "2":
+                        umo_data["active_level"] = "1"
+                umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
                 existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
                 combined_prefixes = list(set(existing_prefixes + prefixes))
                 umo_data["prefixes"] = self._storage._list_to_str(combined_prefixes)
@@ -140,10 +224,28 @@ class CronTasks:
                 umo_data["used_orders"] = used_orders
                 self._storage.set_umo_data_by_key(umo_key, umo_data)
                 self._wire(
-                    f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
+                    f"[AfdianModel] 用户{user_id}累加{days}天(Lv{plan_level})，剩余{umo_data['remaining_days']}天 "
                     f"订单{order.get('out_trade_no','')} 下单时间"
                     f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
                 )
+
+    def _infer_plan_level(self, prefixes: list) -> str:
+        """根据前缀推断方案等级。检查前缀是否属于 Lv2 > Lv1 > Lv0"""
+        try:
+            cfg_fn = getattr(self._plan_manager, '_config_fn', None)
+            if cfg_fn and callable(cfg_fn):
+                cfg = cfg_fn()
+                models_2 = self._storage._str_to_list(cfg.get("models_2", ""))
+                for p in prefixes:
+                    if p in models_2 or any(p.startswith(m) or m.startswith(p) for m in models_2):
+                        return "2"
+                models_1 = self._storage._str_to_list(cfg.get("models_1", ""))
+                for p in prefixes:
+                    if p in models_1 or any(p.startswith(m) or m.startswith(p) for m in models_1):
+                        return "1"
+        except Exception:
+            pass
+        return "1"
 
     def _seconds_until_next_hour(self, hour: int) -> int:
         now = datetime.now()
