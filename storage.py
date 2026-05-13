@@ -58,6 +58,50 @@ class StorageManager:
         except Exception:
             pass
 
+    def full_reset(self) -> dict:
+        """完全清除所有存储数据（订单记录 + 用户数据 + 映射关系）。
+        返回清除统计。"""
+        stats = {"orders": 0, "umo_data": 0, "user_mappings": 0, "active_umos": 0}
+
+        # 1. 清除已处理订单
+        stats["orders"] = len(self._processed_orders)
+        self.clear_orders()
+
+        # 2. 收集并清除所有 umo 数据
+        all_keys = list(sp.keys())
+        for key in all_keys:
+            if key.startswith(SP_UMO_PREFIX):
+                sp.put(key, None)
+                stats["umo_data"] += 1
+
+        # 3. 清除用户映射
+        user_index = sp.get(SP_USER_INDEX, [])
+        for user_id in list(user_index):
+            sp.put(f"{SP_BY_AFDIAN}{user_id}", None)
+            stats["user_mappings"] += 1
+
+        # 4. 清除活跃绑定列表
+        active = sp.get(SP_ACTIVE_UMOS, [])
+        stats["active_umos"] = len(active)
+        sp.put(SP_ACTIVE_UMOS, [])
+
+        # 5. 清除方案映射
+        sp.put(SP_PLAN_MAPPING, {})
+
+        # 6. 清除用户索引
+        sp.put(SP_USER_INDEX, [])
+
+        # 7. 删除持久化文件
+        for path in (PERSISTENCE_PATH,):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+        self._wire(f"[AfdianModel] 全量重置完成: {stats}", "info")
+        return stats
+
     @staticmethod
     def _umo_key(umo) -> str:
         return f"{SP_UMO_PREFIX}{json.dumps(umo, separators=(',', ':'), sort_keys=True)}"

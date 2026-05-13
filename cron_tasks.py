@@ -138,19 +138,27 @@ class CronTasks:
                 await asyncio.sleep(POLL_INTERVAL)
                 continue
             try:
-                resp = await api.query_order(page=1)
-                if resp.get("ec") != 200:
-                    self._wire(f"[AfdianModel] Poll FAIL | API错误: {resp}", "warning")
-                    await asyncio.sleep(POLL_INTERVAL)
-                    continue
-                orders = resp.get("data", {}).get("list", [])
-                processed = 0
-                for order in orders:
-                    await self._process_single_order(order)
-                    processed += 1
+                pg = 1
+                total_scanned = 0
+                while True:
+                    resp = await api.query_order(page=pg)
+                    if resp.get("ec") != 200:
+                        self._wire(f"[AfdianModel] Poll FAIL | API错误 p{pg}: {resp}", "warning")
+                        break
+                    data = resp.get("data", {})
+                    orders = data.get("list", [])
+                    if not orders:
+                        break
+                    for order in orders:
+                        await self._process_single_order(order)
+                        total_scanned += 1
+                    total_pages = data.get("total_page", 1)
+                    if pg >= total_pages:
+                        break
+                    pg += 1
                 active_umos = self._storage.get_active_umos()
                 self._wire(
-                    f"[AfdianModel] Poll OK | Orders: {processed} scanned | "
+                    f"[AfdianModel] Poll OK | Orders: {total_scanned} scanned ({pg} pages) | "
                     f"Bindings: {len(active_umos)} active"
                 )
             except Exception as e:
@@ -161,8 +169,6 @@ class CronTasks:
         out_trade_no = order.get("out_trade_no", "")
         if not out_trade_no:
             return
-        if self._storage.is_order_processed(out_trade_no):
-            return
         status = order.get("status", 0)
         if status != 2:
             return
@@ -170,44 +176,64 @@ class CronTasks:
         plan_mapping = self._plan_manager.get_plan_mapping()
         if plan_id not in plan_mapping:
             return
-        self._storage.mark_order_processed(out_trade_no)
         plan = plan_mapping[plan_id]
         days = plan["days"]
         prefixes = plan["prefixes"]
         user_id = order.get("user_id", "")
         existing = self._storage.get_user_mapping(user_id)
         umo_key = existing if existing else None
+
+        # ── 幂等去重：used_orders 优先（不依赖 processed_orders.json）──
         if umo_key:
             umo_data = sp.get(umo_key, {})
             if umo_data:
+                umo_data = dict(umo_data)
                 umo_data = self._migrate_data(umo_data)
                 used_orders = umo_data.get("used_orders", [])
                 if out_trade_no in used_orders:
+                    # 同步标记到文件（兜底）
+                    if not self._storage.is_order_processed(out_trade_no):
+                        self._storage.mark_order_processed(out_trade_no)
                     return
-                # 确定该 plan 对应等级（通过前缀推断）
-                plan_level = self._infer_plan_level(prefixes)
-                if plan_level == "2":
-                    umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
-                    umo_data["active_level"] = "2"
+
+        # 文件级去重（兜底：umodata 无此订单但文件有记录）
+        if self._storage.is_order_processed(out_trade_no):
+            return
+
+        self._storage.mark_order_processed(out_trade_no)
+
+        if umo_key:
+            if not umo_data:
+                umo_data = sp.get(umo_key, {})
+                if not umo_data:
+                    umo_data = {}
                 else:
-                    umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
-                    if umo_data.get("active_level", "0") != "2":
-                        umo_data["active_level"] = "1"
-                umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
-                existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
-                combined_prefixes = list(set(existing_prefixes + prefixes))
-                umo_data["prefixes"] = self._storage._list_to_str(combined_prefixes)
-                umo_data["expire_time"] = (
-                    datetime.now() + timedelta(days=umo_data["remaining_days"])
-                ).strftime("%Y-%m-%d %H:%M:%S")
-                used_orders.append(out_trade_no)
-                umo_data["used_orders"] = used_orders
-                self._storage.set_umo_data_by_key(umo_key, umo_data)
-                self._wire(
-                    f"[AfdianModel] 用户{user_id}累加{days}天(Lv{plan_level})，剩余{umo_data['remaining_days']}天 "
-                    f"订单{order.get('out_trade_no','')} 下单时间"
-                    f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
-                )
+                    umo_data = dict(umo_data)
+                    umo_data = self._migrate_data(umo_data)
+            used_orders = umo_data.get("used_orders", [])
+            plan_level = self._infer_plan_level(prefixes)
+            if plan_level == "2":
+                umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
+                umo_data["active_level"] = "2"
+            else:
+                umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
+                if umo_data.get("active_level", "0") != "2":
+                    umo_data["active_level"] = "1"
+            umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
+            existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
+            combined_prefixes = list(set(existing_prefixes + prefixes))
+            umo_data["prefixes"] = self._storage._list_to_str(combined_prefixes)
+            umo_data["expire_time"] = (
+                datetime.now() + timedelta(days=umo_data["remaining_days"])
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            used_orders.append(out_trade_no)
+            umo_data["used_orders"] = used_orders
+            self._storage.set_umo_data_by_key(umo_key, umo_data)
+            self._wire(
+                f"[AfdianModel] 用户{user_id}累加{days}天(Lv{plan_level})，剩余{umo_data['remaining_days']}天 "
+                f"订单{out_trade_no} 下单时间"
+                f"@{datetime.fromtimestamp(order.get('create_time',0)).strftime('%Y-%m-%d %H:%M:%S') if order.get('create_time') else '未知'}"
+            )
 
     def _infer_plan_level(self, prefixes: list) -> str:
         """根据前缀推断方案等级。检查前缀是否属于 Lv2 > Lv1 > Lv0"""
