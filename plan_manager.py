@@ -1,5 +1,5 @@
 from astrbot.core import sp
-from .storage import SP_PLAN_MAPPING
+from .storage import SP_PLAN_MAPPING, StorageManager
 
 
 class PlanManager:
