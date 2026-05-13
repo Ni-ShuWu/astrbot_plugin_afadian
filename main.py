@@ -185,6 +185,11 @@ class AfdianModelPlugin(Star):
         async for res in self._admin_commands.cmd_addmodels(event, self._check_admin):
             yield res
 
+    @filter.command("afdian_delmodels")
+    async def cmd_delmodels(self, event: AstrMessageEvent):
+        async for res in self._admin_commands.cmd_delmodels(event, self._check_admin):
+            yield res
+
     @filter.command("afdian_addplan")
     async def cmd_addplan(self, event: AstrMessageEvent):
         async for res in self._admin_commands.cmd_addplan(event, self._check_admin):
