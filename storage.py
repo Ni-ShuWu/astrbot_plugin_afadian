@@ -67,31 +67,35 @@ class StorageManager:
         stats["orders"] = len(self._processed_orders)
         self.clear_orders()
 
-        # 2. 收集并清除所有 umo 数据
-        all_keys = list(sp.keys())
-        for key in all_keys:
-            if key.startswith(SP_UMO_PREFIX):
-                sp.put(key, None)
-                stats["umo_data"] += 1
+        # 2. 清除所有 umo 数据（从 active_umos 遍历 + user_index 反查兜底）
+        active = list(sp.get(SP_ACTIVE_UMOS, []))
+        stats["active_umos"] = len(active)
+        seen_umo = set()
 
-        # 3. 清除用户映射
-        user_index = sp.get(SP_USER_INDEX, [])
-        for user_id in list(user_index):
+        # 活跃绑定中的 umo_keys
+        for umo_key in active:
+            sp.put(umo_key, None)
+            sp.put(umo_key + ":current", None)
+            seen_umo.add(umo_key)
+            stats["umo_data"] += 1
+
+        # 用户索引中反查的非活跃 umo_keys（如已降级 Lv0 的残留数据）
+        user_index = list(sp.get(SP_USER_INDEX, []))
+        for user_id in user_index:
+            umo_key = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
+            if umo_key and umo_key not in seen_umo:
+                sp.put(umo_key, None)
+                sp.put(umo_key + ":current", None)
+                stats["umo_data"] += 1
             sp.put(f"{SP_BY_AFDIAN}{user_id}", None)
             stats["user_mappings"] += 1
 
-        # 4. 清除活跃绑定列表
-        active = sp.get(SP_ACTIVE_UMOS, [])
-        stats["active_umos"] = len(active)
+        # 3. 清除主键
         sp.put(SP_ACTIVE_UMOS, [])
-
-        # 5. 清除方案映射
         sp.put(SP_PLAN_MAPPING, {})
-
-        # 6. 清除用户索引
         sp.put(SP_USER_INDEX, [])
 
-        # 7. 删除持久化文件
+        # 4. 删除持久化文件
         for path in (PERSISTENCE_PATH,):
             try:
                 if os.path.exists(path):
