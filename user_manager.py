@@ -76,7 +76,7 @@ class UserManager:
         )
         self._storage.set_umo_data(umo, umo_data)
         self._storage.register_umo(umo_key)
-        sp.put(f"{SP_BY_AFDIAN}{user_id}", umo_key)
+        self._storage.set_user_mapping(user_id, umo_key)
         return umo_data
 
     def get_model_list(self, config_fn) -> list:
