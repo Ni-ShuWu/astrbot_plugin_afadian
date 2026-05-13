@@ -31,8 +31,10 @@ class StorageManager:
     def _save_processed_orders(self):
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(ORDERS_PATH, "w", encoding="utf-8") as f:
+            tmp_path = ORDERS_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(list(self._processed_orders), f)
+            os.replace(tmp_path, ORDERS_PATH)
         except Exception as e:
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
@@ -171,8 +173,10 @@ class StorageManager:
                     state["user_mappings"][user_id] = val
 
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(PERSISTENCE_PATH, "w", encoding="utf-8") as f:
+            tmp_path = PERSISTENCE_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, PERSISTENCE_PATH)
         except Exception as e:
             self._wire(f"[AfdianModel] 状态持久化失败: {e}", "error")
 

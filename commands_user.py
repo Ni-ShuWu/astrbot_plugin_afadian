@@ -38,8 +38,8 @@ class UserCommands:
 • /afdian_reset <订单号> - 释放指定订单的绑定状态
 • /afdian_reset_all YES - ⚠️ 一键清除所有缓存数据
 • /afdian_query <订单号> - 查询指定订单详情
-• /afdian_addmodels <方案等级> <模型名> - 向方案添加模型(0=公开,1,2)
-• /afdian_delmodels [模型名] - 移除模型/可达性测试
+• /afdian_addmodels <方案等级> <模型名...> - 批量向方案添加模型(0=公开,1,2)
+• /afdian_delmodels [模型名...] - 批量移除模型/可达性测试
 • /afdian_addplan <plan_id> <天数> <前缀> - 添加赞助方案
 • /afdian_delplan <plan_id> - 删除赞助方案
 • /afdian_getconfig - 查看当前插件配置
