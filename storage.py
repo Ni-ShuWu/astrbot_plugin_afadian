@@ -31,8 +31,10 @@ class StorageManager:
     def _save_processed_orders(self):
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(ORDERS_PATH, "w", encoding="utf-8") as f:
+            tmp_path = ORDERS_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(list(self._processed_orders), f)
+            os.replace(tmp_path, ORDERS_PATH)
         except Exception as e:
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
@@ -71,6 +73,25 @@ class StorageManager:
     def set_umo_data(self, umo, data: dict):
         key = self._umo_key(umo)
         sp.put(key, data)
+        self._dump_state()
+
+    def get_umo_data_by_key(self, umo_key: str) -> dict:
+        """直接通过 umo_key 获取 umo 数据，避免 key→umo→key 的来回转换"""
+        data = sp.get(umo_key, {})
+        if data:
+            data = dict(data)
+            data["prefixes"] = self._str_to_list(data.get("prefixes", ""))
+        return data
+
+    def set_umo_data_by_key(self, umo_key: str, data: dict):
+        """直接通过 umo_key 写入数据并触发持久化"""
+        sp.put(umo_key, data)
+        self._dump_state()
+
+    def remove_umo_by_key(self, umo_key: str):
+        """清理 umo 数据及 :current 键并触发持久化"""
+        sp.put(umo_key, None)
+        sp.put(umo_key + ":current", None)
         self._dump_state()
 
     def register_umo(self, umo_key: str):
@@ -119,6 +140,11 @@ class StorageManager:
 
     def set_current_model(self, umo, model: str):
         sp.put(self._umo_key(umo) + ":current", model)
+        self._dump_state()
+
+    def set_current_model_by_key(self, umo_key: str, model: str):
+        """直接通过 umo_key 设置当前模型并触发持久化"""
+        sp.put(umo_key + ":current", model)
         self._dump_state()
 
     @staticmethod
@@ -171,8 +197,10 @@ class StorageManager:
                     state["user_mappings"][user_id] = val
 
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(PERSISTENCE_PATH, "w", encoding="utf-8") as f:
+            tmp_path = PERSISTENCE_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, PERSISTENCE_PATH)
         except Exception as e:
             self._wire(f"[AfdianModel] 状态持久化失败: {e}", "error")
 
