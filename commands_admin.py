@@ -1,3 +1,4 @@
+import asyncio
 import os
 from .config import ConfigManager
 from .storage import StorageManager
@@ -233,9 +234,8 @@ class AdminCommands:
         parts = event.message_str.strip().split(maxsplit=1)
         cfg = self._config_fn()
 
-        # 无参数: 可达性测试
+        # 无参数: API连通性测试（真实调用模型API验证）
         if len(parts) < 2:
-            yield event.plain_result("🔍 正在测试所有模型的配置状态...")
             model_list = self._plan_manager._str_to_list(cfg.get("model_list", ""))
             models_1 = self._plan_manager._str_to_list(cfg.get("models_1", ""))
             models_2 = self._plan_manager._str_to_list(cfg.get("models_2", ""))
@@ -248,28 +248,69 @@ class AdminCommands:
             for m in models_2:
                 all_models[m] = all_models.get(m, set()) | {"Lv2"}
 
-            lines = ["📊 **模型可达性测试报告**\n"]
-            lines.append(f"公开模型: {len(model_list)} 个")
-            lines.append(f"Lv1方案模型: {len(models_1)} 个")
-            lines.append(f"Lv2方案模型: {len(models_2)} 个")
-            lines.append(f"去重总计: {len(all_models)} 个\n")
+            total = len(all_models)
+            yield event.plain_result(f"🔍 正在对 {total} 个模型执行 API 连通性测试，请稍候...")
 
-            ok_count = 0
-            warn_count = 0
-            for model, tiers in sorted(all_models.items()):
-                tier_str = "+".join(sorted(tiers))
-                in_public = "公开" in tiers
-                if in_public:
-                    ok_count += 1
-                    status = "✅"
-                else:
-                    warn_count += 1
-                    status = "⚠️ 未在公开列表"
-                lines.append(f"  {status} `{model}` → {tier_str}")
+            context = event._message_context
+            umo = event.unified_msg_origin
+            from astrbot.core.provider.entities import ProviderType
+            from astrbot.core import sp
 
-            lines.append(f"\n✅ 正常可达: {ok_count} 个")
-            if warn_count > 0:
-                lines.append(f"⚠️ 仅存在于方案未在公开列表: {warn_count} 个（可能不可达）")
+            # 保存管理员当前模型，测试结束后恢复
+            current_model_key = f"{SP_UMO_PREFIX}{umo}:current"
+            original_model = sp.get(current_model_key, "")
+
+            results = []
+            for model_name, locations in sorted(all_models.items()):
+                loc_tags = "+".join(sorted(locations))
+                try:
+                    await context.provider_manager.set_provider(
+                        model_name, ProviderType.CHAT_COMPLETION, umo
+                    )
+                    provider_id = await context.get_current_chat_provider_id(umo)
+                    if not provider_id:
+                        results.append((model_name, loc_tags, False, "无匹配的提供商"))
+                        continue
+
+                    resp = await asyncio.wait_for(
+                        context.llm_generate(
+                            chat_provider_id=provider_id,
+                            prompt="ping",
+                        ),
+                        timeout=15.0
+                    )
+                    results.append((model_name, loc_tags, True, "OK"))
+                except asyncio.TimeoutError:
+                    results.append((model_name, loc_tags, False, "超时(15s)"))
+                except Exception as e:
+                    err_msg = str(e)[:100]
+                    results.append((model_name, loc_tags, False, err_msg))
+
+            # 恢复管理员原来的模型
+            if original_model and original_model != "默认模型":
+                try:
+                    await context.provider_manager.set_provider(
+                        original_model, ProviderType.CHAT_COMPLETION, umo
+                    )
+                except Exception:
+                    pass
+
+            reachable = [r for r in results if r[2]]
+            unreachable = [r for r in results if not r[2]]
+
+            lines = ["📊 **模型 API 连通性测试报告**\n"]
+            lines.append(f"✅ 可达: {len(reachable)} 个 | ❌ 不可达: {len(unreachable)} 个 | 总计: {total}\n")
+
+            if reachable:
+                lines.append("**可达模型:**")
+                for model, loc, _, _ in reachable:
+                    lines.append(f"  ✅ `{model}` ({loc})")
+
+            if unreachable:
+                lines.append("\n**不可达模型:**")
+                for model, loc, _, reason in unreachable:
+                    lines.append(f"  ❌ `{model}` ({loc}) — {reason}")
+
             lines.append("\n💡 使用 `/afdian_delmodels <模型名>` 从所有层级移除指定模型")
             yield event.plain_result("\n".join(lines))
             return
