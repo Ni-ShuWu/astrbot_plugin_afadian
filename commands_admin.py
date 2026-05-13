@@ -171,36 +171,28 @@ class AdminCommands:
             yield event.plain_result(
                 "⚠️ **警告：此操作将清除所有数据！**\n\n"
                 "包括：\n"
-                "• 所有已绑定的订单\n"
+                "• 所有已绑定的订单记录\n"
                 "• 所有用户的赞助信息\n"
-                "• 所有活跃绑定记录\n\n"
+                "• 所有活跃绑定与模型映射\n"
+                "• 持久化文件（persistence.json）\n\n"
                 "**不会清除：**\n"
-                "• 插件配置文件\n\n"
+                "• 插件配置文件（模型列表、方案ID等）\n\n"
                 "如需执行，请输入：\n"
                 "`/afdian_reset_all YES`"
             )
             return
 
-        active_umos = self._storage.get_active_umos()
-        for umo_key in active_umos:
-            self._storage.remove_umo_by_key(umo_key)
-        self._storage.set_active_umos([])
+        stats = self._storage.full_reset()
 
-        all_keys = sp.keys()
-        user_keys = [k for k in all_keys if k.startswith(SP_UMO_PREFIX)]
-        for key in user_keys:
-            self._storage.remove_umo_by_key(key)
-        self._storage.persist()
-
-        self._storage.clear_orders()
-
-        self._wire(f"[AfdianModel] 一键重置完成")
+        self._wire(f"[AfdianModel] 一键重置完成: {stats}")
         yield event.plain_result(
             f"✅ **一键重置完成！**\n\n"
             f"已清除：\n"
-            f"• {len(active_umos)} 个活跃绑定\n"
-            f"• {len(user_keys)} 个用户数据\n"
-            f"• 已处理订单记录\n\n"
+            f"• {stats['orders']} 条订单记录\n"
+            f"• {stats['umo_data']} 条用户数据\n"
+            f"• {stats['user_mappings']} 个用户映射\n"
+            f"• {stats['active_umos']} 个活跃绑定\n"
+            f"• persistence.json 持久化文件\n\n"
             f"插件配置已保留，可正常使用。"
         )
 
