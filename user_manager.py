@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
+from .storage import StorageManager
 from .plan_manager import PlanManager
 
 
@@ -14,7 +14,7 @@ class UserManager:
     async def bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0, order_no: str = ""):
         days = plan["days"]
         prefixes = plan["prefixes"]
-        existing = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
+        existing = self._storage.get_user_mapping(user_id)
         umo_key = self._storage._umo_key(umo)
         
         if existing and existing != umo_key:
@@ -31,7 +31,7 @@ class UserManager:
                         "used_orders": old_data.get("used_orders", [])
                     }
                 self._storage.set_umo_data(umo, new_data)
-                sp.put(existing, None)
+                self._storage.remove_umo_by_key(existing)
                 self._storage.unregister_umo(existing)
 
         umo_data = self._storage.get_umo_data(umo)

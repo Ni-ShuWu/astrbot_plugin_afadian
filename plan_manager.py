@@ -31,8 +31,7 @@ class PlanManager:
             updated = True
             self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
         if updated:
-            sp.put(SP_PLAN_MAPPING, existing)
-            self._storage._dump_state()
+            self._storage.set_plan_mapping(existing)
 
     def get_plan_mapping(self) -> dict:
         mapping = sp.get(SP_PLAN_MAPPING, {})
@@ -80,15 +79,13 @@ class PlanManager:
 
     @staticmethod
     def _list_to_str(lst: list) -> str:
-        if not lst:
-            return ""
-        return ",".join(lst)
+        """委托到 StorageManager 避免重复实现"""
+        return StorageManager._list_to_str(lst)
 
     @staticmethod
     def _str_to_list(s: str) -> list:
-        if not s or not isinstance(s, str):
-            return []
-        return [item.strip() for item in s.split(",") if item.strip()]
+        """委托到 StorageManager 避免重复实现"""
+        return StorageManager._str_to_list(s)
 
     def match_prefixes(self, prefix: str, model_list: list) -> list:
         matched = []

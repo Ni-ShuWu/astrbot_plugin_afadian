@@ -1,7 +1,8 @@
 import asyncio
 import os
+from astrbot.core import sp
 from .config import ConfigManager
-from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
+from .storage import StorageManager, SP_UMO_PREFIX
 from .plan_manager import PlanManager
 
 
@@ -78,18 +79,16 @@ class AdminCommands:
 
         umo_key = self._storage.get_user_mapping(user_id)
         if umo_key:
-            from astrbot.core import sp
             umo_data = sp.get(umo_key, {})
             if umo_data:
                 used_orders = umo_data.get("used_orders", [])
                 if order_no in used_orders:
                     used_orders.remove(order_no)
                     umo_data["used_orders"] = used_orders
-                    sp.put(umo_key, umo_data)
-                    self._storage.persist()
+                    self._storage.set_umo_data_by_key(umo_key, umo_data)
                     self._wire(f"[AfdianModel] 从用户数据中移除订单: {order_no}")
                 if not used_orders:
-                    sp.put(umo_key, None)
+                    self._storage.remove_umo_by_key(umo_key)
                     self._storage.unregister_umo(umo_key)
                     self._storage.remove_user_mapping(user_id)
                     self._wire(f"[AfdianModel] 用户数据已销毁: {user_id}")
@@ -123,17 +122,15 @@ class AdminCommands:
             )
             return
 
-        from astrbot.core import sp
-        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        active_umos = self._storage.get_active_umos()
         for umo_key in active_umos:
-            sp.put(umo_key, None)
-        sp.put(SP_ACTIVE_UMOS, [])
-        self._storage.persist()
+            self._storage.remove_umo_by_key(umo_key)
+        self._storage.set_active_umos([])
 
         all_keys = sp.keys()
         user_keys = [k for k in all_keys if k.startswith(SP_UMO_PREFIX)]
         for key in user_keys:
-            sp.put(key, None)
+            self._storage.remove_umo_by_key(key)
         self._storage.persist()
 
         self._storage.clear_orders()
@@ -179,7 +176,7 @@ class AdminCommands:
         # 等级0: 公开模型 (model_list)
         if level == "0":
             model_list_raw = cfg.get("model_list", "")
-            model_list = self._plan_manager._str_to_list(model_list_raw)
+            model_list = self._storage._str_to_list(model_list_raw)
             added = []
             skipped = []
             for mn in model_names:
@@ -191,7 +188,7 @@ class AdminCommands:
             if not added:
                 yield event.plain_result(f"所有模型已在公开模型列表中: {', '.join(model_names)}")
                 return
-            cfg["model_list"] = self._plan_manager._list_to_str(model_list)
+            cfg["model_list"] = self._storage._list_to_str(model_list)
             self._config_manager.save_plugin_config(cfg)
             for mn in added:
                 self._wire(f"[AfdianModel] 公开模型添加: {mn}")
@@ -208,7 +205,7 @@ class AdminCommands:
         # 等级1/2: 赞助方案模型
         models_key = f"models_{level}"
         current_models = cfg.get(models_key, "")
-        current_list = self._plan_manager._str_to_list(current_models)
+        current_list = self._storage._str_to_list(current_models)
 
         added = []
         skipped = []
@@ -223,26 +220,24 @@ class AdminCommands:
             yield event.plain_result(f"所有模型已在方案{level}中: {', '.join(model_names)}")
             return
 
-        cfg[models_key] = self._plan_manager._list_to_str(current_list)
+        cfg[models_key] = self._storage._list_to_str(current_list)
         self._config_manager.save_plugin_config(cfg)
 
         self._plan_manager.sync_plan_mapping()
 
         plan_id = cfg.get(f"plan_id_{level}", "")
 
-        from astrbot.core import sp
         updated_users = 0
-        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        active_umos = self._storage.get_active_umos()
         for umo_key in active_umos:
             umo_data = sp.get(umo_key, {})
             if umo_data and umo_data.get("plan_id") == plan_id:
-                existing_prefixes = self._plan_manager._str_to_list(umo_data.get("prefixes", ""))
+                existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
                 for mn in added:
                     if mn not in existing_prefixes:
                         existing_prefixes.append(mn)
-                umo_data["prefixes"] = self._plan_manager._list_to_str(existing_prefixes)
-                sp.put(umo_key, umo_data)
-                self._storage.persist()
+                umo_data["prefixes"] = self._storage._list_to_str(existing_prefixes)
+                self._storage.set_umo_data_by_key(umo_key, umo_data)
                 updated_users += 1
 
         for mn in added:
@@ -269,9 +264,9 @@ class AdminCommands:
 
         # 无参数: API连通性测试（真实调用模型API验证）
         if len(parts) < 2:
-            model_list = self._plan_manager._str_to_list(cfg.get("model_list", ""))
-            models_1 = self._plan_manager._str_to_list(cfg.get("models_1", ""))
-            models_2 = self._plan_manager._str_to_list(cfg.get("models_2", ""))
+            model_list = self._storage._str_to_list(cfg.get("model_list", ""))
+            models_1 = self._storage._str_to_list(cfg.get("models_1", ""))
+            models_2 = self._storage._str_to_list(cfg.get("models_2", ""))
 
             all_models = {}
             for m in model_list:
@@ -287,7 +282,6 @@ class AdminCommands:
             context = event._message_context
             umo = event.unified_msg_origin
             from astrbot.core.provider.entities import ProviderType
-            from astrbot.core import sp
 
             # 保存管理员当前模型，测试结束后恢复
             current_model_key = f"{SP_UMO_PREFIX}{umo}:current"
@@ -355,9 +349,9 @@ class AdminCommands:
             return
 
         # 预处理各级别列表（只读一次配置）
-        model_list = self._plan_manager._str_to_list(cfg.get("model_list", ""))
-        models_1 = self._plan_manager._str_to_list(cfg.get("models_1", ""))
-        models_2 = self._plan_manager._str_to_list(cfg.get("models_2", ""))
+        model_list = self._storage._str_to_list(cfg.get("model_list", ""))
+        models_1 = self._storage._str_to_list(cfg.get("models_1", ""))
+        models_2 = self._storage._str_to_list(cfg.get("models_2", ""))
 
         per_model = {}  # model_name → removed_from list
         deleted_set = set()
@@ -383,9 +377,9 @@ class AdminCommands:
             yield event.plain_result(f"指定模型均不在任何层级中: {', '.join(model_names)}")
             return
 
-        cfg["model_list"] = self._plan_manager._list_to_str(model_list)
-        cfg["models_1"] = self._plan_manager._list_to_str(models_1)
-        cfg["models_2"] = self._plan_manager._list_to_str(models_2)
+        cfg["model_list"] = self._storage._list_to_str(model_list)
+        cfg["models_1"] = self._storage._list_to_str(models_1)
+        cfg["models_2"] = self._storage._list_to_str(models_2)
 
         # 持久化配置
         self._config_manager.save_plugin_config(cfg)
@@ -396,12 +390,12 @@ class AdminCommands:
         # 热同步: 更新所有受影响活跃用户
         from astrbot.core import sp
         user_updates = 0
-        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        active_umos = self._storage.get_active_umos()
         for umo_key in active_umos:
             umo_data = sp.get(umo_key, {})
             if not umo_data:
                 continue
-            prefixes = self._plan_manager._str_to_list(umo_data.get("prefixes", ""))
+            prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
             updated = False
             for mn in deleted_set:
                 if mn in prefixes:
@@ -409,11 +403,10 @@ class AdminCommands:
                     updated = True
                 current_model_key = umo_key + ":current"
                 if sp.get(current_model_key, "") == mn:
-                    sp.put(current_model_key, "默认模型")
+                    self._storage.set_current_model_by_key(umo_key, "默认模型")
             if updated:
-                umo_data["prefixes"] = self._plan_manager._list_to_str(prefixes)
-                sp.put(umo_key, umo_data)
-                self._storage.persist()
+                umo_data["prefixes"] = self._storage._list_to_str(prefixes)
+                self._storage.set_umo_data_by_key(umo_key, umo_data)
                 user_updates += 1
 
         for mn, removed in per_model.items():
@@ -452,7 +445,7 @@ class AdminCommands:
             return
 
         mapping = self._storage.get_plan_mapping()
-        mapping[plan_id] = {"days": days, "prefixes": self._plan_manager._list_to_str(prefixes)}
+        mapping[plan_id] = {"days": days, "prefixes": self._storage._list_to_str(prefixes)}
         self._storage.set_plan_mapping(mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
@@ -535,7 +528,7 @@ class AdminCommands:
             if plan:
                 plan_info = f"\n已配置方案: Lv{plan.get('level')} {plan['days']}天 [{', '.join(plan['prefixes'])}]"
             else:
-                plan_info = "\n⚠️ 方案未配置，请添加到配置"
+                plan_info = "\n⚠ 方案未配置"
         yield event.plain_result(
             f"订单查询结果:\n"
             f"订单号: {order_no}\n"

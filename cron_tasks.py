@@ -2,7 +2,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 from astrbot.core import sp
-from .storage import StorageManager, SP_ACTIVE_UMOS, SP_UMO_PREFIX, SP_BY_AFDIAN
+from .storage import StorageManager, SP_UMO_PREFIX
 from .plan_manager import PlanManager
 
 
@@ -28,22 +28,23 @@ class CronTasks:
         while True:
             await asyncio.sleep(self._seconds_until_next_hour(0))
             try:
-                active_umos = sp.get(SP_ACTIVE_UMOS, [])
+                active_umos = self._storage.get_active_umos()
                 total = len(active_umos)
                 if not active_umos:
                     self._wire("[AfdianModel] Daily OK | Bindings: 0 active, nothing to do")
                     continue
                 now = datetime.now()
-                to_remove = []
                 expired = 0
                 for key in list(active_umos):
-                    data = sp.get(key, {})
+                    data = self._storage.get_umo_data_by_key(key)
                     if not data or not isinstance(data, dict):
-                        to_remove.append(key)
+                        self._storage.remove_umo_by_key(key)
+                        self._storage.unregister_umo(key)
                         continue
                     days = data.get("remaining_days", 0)
                     if days <= 0:
-                        to_remove.append(key)
+                        self._storage.remove_umo_by_key(key)
+                        self._storage.unregister_umo(key)
                         continue
                     days -= 1
                     if days <= 0:
@@ -59,20 +60,14 @@ class CronTasks:
                                     pass
                             except Exception:
                                 pass
-                        sp.put(key, None)
-                        sp.put(current_key, None)
-                        to_remove.append(key)
+                        self._storage.remove_umo_by_key(key)
+                        self._storage.unregister_umo(key)
                         expired += 1
                     else:
                         data["remaining_days"] = days
                         data["expire_time"] = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-                        sp.put(key, data)
-                for key in to_remove:
-                    if key in active_umos:
-                        active_umos.remove(key)
-                sp.put(SP_ACTIVE_UMOS, active_umos)
-                self._storage.persist()
-                remaining = len(active_umos)
+                        self._storage.set_umo_data_by_key(key, data)
+                remaining = len(self._storage.get_active_umos())
                 self._wire(
                     f"[AfdianModel] Daily OK | Bindings: {total} -> {remaining} | "
                     f"Expired: {expired} cleaned"
@@ -99,7 +94,7 @@ class CronTasks:
                 for order in orders:
                     await self._process_single_order(order)
                     processed += 1
-                active_umos = sp.get(SP_ACTIVE_UMOS, [])
+                active_umos = self._storage.get_active_umos()
                 self._wire(
                     f"[AfdianModel] Poll OK | Orders: {processed} scanned | "
                     f"Bindings: {len(active_umos)} active"
@@ -126,7 +121,7 @@ class CronTasks:
         days = plan["days"]
         prefixes = plan["prefixes"]
         user_id = order.get("user_id", "")
-        existing = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
+        existing = self._storage.get_user_mapping(user_id)
         umo_key = existing if existing else None
         if umo_key:
             umo_data = sp.get(umo_key, {})
@@ -143,8 +138,7 @@ class CronTasks:
                 ).strftime("%Y-%m-%d %H:%M:%S")
                 used_orders.append(out_trade_no)
                 umo_data["used_orders"] = used_orders
-                sp.put(umo_key, umo_data)
-                self._storage.persist()
+                self._storage.set_umo_data_by_key(umo_key, umo_data)
                 self._wire(
                     f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
                     f"订单{order.get('out_trade_no','')} 下单时间"
