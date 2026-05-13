@@ -26,27 +26,8 @@ class CronTasks:
         self._wire = wire_fn
 
     def _migrate_data(self, data: dict) -> dict:
-        """迁移旧数据到新的分级存储格式"""
-        if not data or not isinstance(data, dict):
-            return data
-        if "l1_days" not in data and "l2_days" not in data:
-            old_level = data.get("level", "1")
-            old_days = data.get("remaining_days", 0)
-            if old_level == "2":
-                data["l2_days"] = old_days
-                data["l1_days"] = 0
-            else:
-                data["l1_days"] = old_days
-                data["l2_days"] = 0
-            data["active_level"] = old_level
-            self._wire(f"[AfdianModel] Cron迁移: lv={old_level} days={old_days}")
-        if "active_level" not in data:
-            if data.get("l2_days", 0) > 0:
-                data["active_level"] = "2"
-            else:
-                data["active_level"] = data.get("level", "1")
-        data["remaining_days"] = data.get("l1_days", 0) + data.get("l2_days", 0)
-        return data
+        """迁移旧数据到新的分级存储格式，委托给 StorageManager 统一实现"""
+        return StorageManager.migrate_umo_data(data, self._wire)
 
     async def _cron_daily(self):
         while True:
@@ -72,50 +53,40 @@ class CronTasks:
                     l1_days = data.get("l1_days", 0)
                     l2_days = data.get("l2_days", 0)
 
-                    # 先消耗 active_level 的天数
                     if active_level == "2":
+                        # 消耗 Lv2 天数，Lv1 在此期间暂停
+                        l2_days -= 1
                         if l2_days <= 0:
-                            # Lv2 已耗尽，检查是否有 Lv1
                             if l1_days > 0:
+                                # Lv2 耗尽 → 切换至 Lv1，当天不消耗 Lv1
                                 data["active_level"] = "1"
                                 data["level"] = "1"
                                 level_switched += 1
                                 self._wire(f"[AfdianModel] UMO{key} Lv2耗尽，切换至Lv1(剩余{l1_days}天)")
-                                # 切换到 Lv1 后继续消耗 Lv1
                                 l2_days = 0
-                                l1_days -= 1
-                                data["l1_days"] = l1_days
                             else:
-                                # 全部耗尽
-                                self._wire(f"[AfdianModel] UMO{key} 全部权限到期，清除绑定")
-                                self._cleanup_expired(key)
+                                # 全部耗尽 → 降级为 Lv0
+                                self._wire(f"[AfdianModel] UMO{key} 全部权限到期，降级为Lv0")
+                                self._downgrade_to_lv0(key)
                                 expired += 1
                                 continue
-                        else:
-                            l2_days -= 1
-                            data["l2_days"] = l2_days
+                        data["l2_days"] = l2_days
+
                     elif active_level == "1":
+                        l1_days -= 1
                         if l1_days <= 0:
-                            self._wire(f"[AfdianModel] UMO{key} Lv1权限到期，清除绑定")
-                            self._cleanup_expired(key)
+                            self._wire(f"[AfdianModel] UMO{key} Lv1权限到期，降级为Lv0")
+                            self._downgrade_to_lv0(key)
                             expired += 1
                             continue
-                        else:
-                            l1_days -= 1
-                            data["l1_days"] = l1_days
+                        data["l1_days"] = l1_days
 
                     # 更新总剩余天数
                     data["remaining_days"] = data.get("l1_days", 0) + data.get("l2_days", 0)
-
-                    # 更新到期时间
-                    if data["remaining_days"] > 0:
-                        data["expire_time"] = (datetime.now() + timedelta(days=data["remaining_days"])).strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        )
-                        self._storage.set_umo_data_by_key(key, data)
-                    else:
-                        self._cleanup_expired(key)
-                        expired += 1
+                    data["expire_time"] = (datetime.now() + timedelta(days=data["remaining_days"])).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    self._storage.set_umo_data_by_key(key, data)
 
                 switched_info = f" | Switched: {level_switched}" if level_switched > 0 else ""
                 self._wire(
@@ -125,10 +96,19 @@ class CronTasks:
             except Exception as e:
                 self._wire(f"[AfdianModel] 每日零点定时任务异常: {e}", "error")
 
-    def _cleanup_expired(self, key: str):
-        """清除过期用户的绑定"""
-        self._storage.remove_umo_by_key(key)
+    def _downgrade_to_lv0(self, key: str):
+        """将过期用户降级为Lv0，保留绑定关系但清除付费权限"""
+        data = sp.get(key, {})
+        if data:
+            data = dict(data)
+            data["active_level"] = "0"
+            data["level"] = "0"
+            data["l1_days"] = 0
+            data["l2_days"] = 0
+            data["remaining_days"] = 0
+            self._storage.set_umo_data_by_key(key, data)
         self._storage.unregister_umo(key)
+        # 恢复默认 provider
         current_key = key + ":current"
         default_provider = sp.get("curr_provider", "")
         if sp.get(current_key) and default_provider:
