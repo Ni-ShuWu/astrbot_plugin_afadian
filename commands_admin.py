@@ -156,15 +156,30 @@ class AdminCommands:
             yield event.plain_result(
                 "用法: `/afdian_addmodels <方案等级> <模型名>`\n\n"
                 "示例: `/afdian_addmodels 1 openai/gpt-5.4-mini-2026-03-17`\n\n"
-                "方案等级: 1 = 赞助方案1, 2 = 赞助方案2"
+                "方案等级: 0 = 公开模型, 1 = 赞助方案1, 2 = 赞助方案2"
             )
             return
 
         level = parts[1]
         model_name = parts[2].strip()
 
-        if level not in ("1", "2"):
-            yield event.plain_result("方案等级只能是 1 或 2")
+        if level not in ("0", "1", "2"):
+            yield event.plain_result("方案等级只能是 0(公开), 1 或 2")
+            return
+
+        # 等级0: 公开模型 (model_list)
+        if level == "0":
+            model_list_raw = cfg.get("model_list", "")
+            model_list = self._plan_manager._str_to_list(model_list_raw)
+            if model_name in model_list:
+                yield event.plain_result(f"模型 `{model_name}` 已在公开模型列表中，无需重复添加")
+                return
+            model_list.append(model_name)
+            cfg["model_list"] = self._plan_manager._list_to_str(model_list)
+            self._config_manager.save_plugin_config(cfg)
+            self._wire(f"[AfdianModel] 公开模型添加: {model_name}")
+            self._wire(f"[AfdianModel] 热同步: 公开模型列表已更新")
+            yield event.plain_result(f"✅ 已向公开模型列表添加: `{model_name}`\n当前公开模型: {', '.join(model_list)}")
             return
 
         if not model_name:
@@ -202,11 +217,129 @@ class AdminCommands:
                     updated_users += 1
 
         self._wire(f"[AfdianModel] 方案{level}添加模型: {model_name}, 更新了 {updated_users} 个用户")
+        self._wire(f"[AfdianModel] 热同步完成: config→plan_mapping→{updated_users}用户")
+
+        msg = f"✅ 已向方案{level}添加模型: `{model_name}`"
+        if plan_id:
+            msg += f"\n方案ID: {plan_id}"
+        msg += f"\n已热同步更新 {updated_users} 个活跃用户"
+        yield event.plain_result(msg)
+
+    async def cmd_delmodels(self, event, is_admin_fn):
+        if not await is_admin_fn(event):
+            yield event.plain_result("无权限")
+            return
+
+        parts = event.message_str.strip().split(maxsplit=1)
+        cfg = self._config_fn()
+
+        # 无参数: 可达性测试
+        if len(parts) < 2:
+            yield event.plain_result("🔍 正在测试所有模型的配置状态...")
+            model_list = self._plan_manager._str_to_list(cfg.get("model_list", ""))
+            models_1 = self._plan_manager._str_to_list(cfg.get("models_1", ""))
+            models_2 = self._plan_manager._str_to_list(cfg.get("models_2", ""))
+
+            all_models = {}
+            for m in model_list:
+                all_models[m] = all_models.get(m, set()) | {"公开"}
+            for m in models_1:
+                all_models[m] = all_models.get(m, set()) | {"Lv1"}
+            for m in models_2:
+                all_models[m] = all_models.get(m, set()) | {"Lv2"}
+
+            lines = ["📊 **模型可达性测试报告**\n"]
+            lines.append(f"公开模型: {len(model_list)} 个")
+            lines.append(f"Lv1方案模型: {len(models_1)} 个")
+            lines.append(f"Lv2方案模型: {len(models_2)} 个")
+            lines.append(f"去重总计: {len(all_models)} 个\n")
+
+            ok_count = 0
+            warn_count = 0
+            for model, tiers in sorted(all_models.items()):
+                tier_str = "+".join(sorted(tiers))
+                in_public = "公开" in tiers
+                if in_public:
+                    ok_count += 1
+                    status = "✅"
+                else:
+                    warn_count += 1
+                    status = "⚠️ 未在公开列表"
+                lines.append(f"  {status} `{model}` → {tier_str}")
+
+            lines.append(f"\n✅ 正常可达: {ok_count} 个")
+            if warn_count > 0:
+                lines.append(f"⚠️ 仅存在于方案未在公开列表: {warn_count} 个（可能不可达）")
+            lines.append("\n💡 使用 `/afdian_delmodels <模型名>` 从所有层级移除指定模型")
+            yield event.plain_result("\n".join(lines))
+            return
+
+        # 有参数: 删除模型
+        model_name = parts[1].strip()
+        if not model_name:
+            yield event.plain_result("模型名不能为空")
+            return
+
+        removed_from = []
+        user_updates = 0
+
+        # 1. 从公开模型列表移除
+        model_list = self._plan_manager._str_to_list(cfg.get("model_list", ""))
+        if model_name in model_list:
+            model_list.remove(model_name)
+            cfg["model_list"] = self._plan_manager._list_to_str(model_list)
+            removed_from.append("公开")
+
+        # 2. 从 Lv1 移除
+        models_1 = self._plan_manager._str_to_list(cfg.get("models_1", ""))
+        if model_name in models_1:
+            models_1.remove(model_name)
+            cfg["models_1"] = self._plan_manager._list_to_str(models_1)
+            removed_from.append("Lv1")
+
+        # 3. 从 Lv2 移除
+        models_2 = self._plan_manager._str_to_list(cfg.get("models_2", ""))
+        if model_name in models_2:
+            models_2.remove(model_name)
+            cfg["models_2"] = self._plan_manager._list_to_str(models_2)
+            removed_from.append("Lv2")
+
+        if not removed_from:
+            yield event.plain_result(f"模型 `{model_name}` 不在任何层级中")
+            return
+
+        # 4. 持久化配置
+        self._config_manager.save_plugin_config(cfg)
+
+        # 5. 同步方案映射
+        self._plan_manager.sync_plan_mapping()
+
+        # 6. 热同步: 更新所有受影响活跃用户
+        from astrbot.core import sp
+        active_umos = sp.get(SP_ACTIVE_UMOS, [])
+        for umo_key in active_umos:
+            umo_data = sp.get(umo_key, {})
+            if not umo_data:
+                continue
+            prefixes = self._plan_manager._str_to_list(umo_data.get("prefixes", ""))
+            if model_name in prefixes:
+                prefixes.remove(model_name)
+                umo_data["prefixes"] = self._plan_manager._list_to_str(prefixes)
+                # 如果当前模型恰好是被删除的模型，重置为默认
+                current_model_key = umo_key + ":current"
+                current_model = sp.get(current_model_key, "")
+                if current_model == model_name:
+                    sp.put(current_model_key, "默认模型")
+                sp.put(umo_key, umo_data)
+                user_updates += 1
+
+        self._wire(f"[AfdianModel] 模型删除: {model_name} from {removed_from}, 更新 {user_updates} 用户")
+        self._wire(f"[AfdianModel] 热同步完成: config→plan_mapping→{user_updates}用户")
+
         yield event.plain_result(
-            f"✅ 已将模型添加到方案{level}：\n\n"
-            f"**{model_name}**\n\n"
-            f"方案{level}当前模型列表：\n" + "\n".join([f"• {m}" for m in current_list]) +
-            (f"\n\n已同步到 {updated_users} 个已绑定用户" if updated_users > 0 else "")
+            f"✅ 已从以下层级移除 `{model_name}`:\n"
+            f"  {', '.join(removed_from)}\n"
+            f"已热同步更新 {user_updates} 个活跃用户"
         )
 
     async def cmd_addplan(self, event, is_admin_fn):
