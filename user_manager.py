@@ -12,28 +12,8 @@ class UserManager:
         self._wire = wire_fn or print
 
     def _migrate_umo_data(self, umo_data: dict) -> dict:
-        """迁移旧数据到新的分级存储格式，兼容存量数据"""
-        if not umo_data:
-            return umo_data
-        if "l1_days" not in umo_data and "l2_days" not in umo_data:
-            old_level = umo_data.get("level", "1")
-            old_days = umo_data.get("remaining_days", 0)
-            if old_level == "2":
-                umo_data["l2_days"] = old_days
-                umo_data["l1_days"] = 0
-            else:
-                umo_data["l1_days"] = old_days
-                umo_data["l2_days"] = 0
-            umo_data["active_level"] = old_level
-            self._wire(f"[AfdianModel] 数据迁移: level={old_level} days={old_days} -> l1={umo_data['l1_days']} l2={umo_data['l2_days']}")
-        if "active_level" not in umo_data:
-            if umo_data.get("l2_days", 0) > 0:
-                umo_data["active_level"] = "2"
-            else:
-                umo_data["active_level"] = umo_data.get("level", "1")
-        # 同步 remaining_days
-        umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
-        return umo_data
+        """迁移旧数据到新的分级存储格式，委托给 StorageManager 统一实现"""
+        return StorageManager.migrate_umo_data(umo_data, self._wire)
 
     async def bind_user(self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0, order_no: str = ""):
         days = plan["days"]
@@ -140,6 +120,14 @@ class UserManager:
 
         # Lv1 和 Lv2 用户可使用 Lv0 模型
         if user_level in ("1", "2"):
+            level_0_prefixes = self._get_level_prefixes("0")
+            for p in level_0_prefixes:
+                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
+                    combined = list(set(user_prefixes + level_0_prefixes))
+                    return True, combined
+
+        # Lv0 用户（含已降级）可使用公开模型
+        if user_level == "0":
             level_0_prefixes = self._get_level_prefixes("0")
             for p in level_0_prefixes:
                 if model_name.startswith(p) or p.startswith(model_name) or model_name == p:

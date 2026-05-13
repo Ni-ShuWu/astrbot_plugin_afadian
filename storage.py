@@ -241,3 +241,29 @@ class StorageManager:
     def persist(self):
         """公开的持久化入口，供直接 sp.put 后调用"""
         self._dump_state()
+
+    @staticmethod
+    def migrate_umo_data(data: dict, wire_fn=None) -> dict:
+        """迁移旧数据到新的分级存储格式（l1_days/l2_days/active_level）。
+        幂等操作，已迁移的数据不会被重复处理。"""
+        if not data or not isinstance(data, dict):
+            return data
+        if "l1_days" not in data and "l2_days" not in data:
+            old_level = data.get("level", "1")
+            old_days = data.get("remaining_days", 0)
+            if old_level == "2":
+                data["l2_days"] = old_days
+                data["l1_days"] = 0
+            else:
+                data["l1_days"] = old_days
+                data["l2_days"] = 0
+            data["active_level"] = old_level
+            if wire_fn:
+                wire_fn(f"[AfdianModel] 数据迁移: lv={old_level} days={old_days} -> l1={data['l1_days']} l2={data['l2_days']}")
+        if "active_level" not in data:
+            if data.get("l2_days", 0) > 0:
+                data["active_level"] = "2"
+            else:
+                data["active_level"] = data.get("level", "1")
+        data["remaining_days"] = data.get("l1_days", 0) + data.get("l2_days", 0)
+        return data

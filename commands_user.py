@@ -222,7 +222,15 @@ class UserCommands:
                     model_id_map[m] = f"zero_{idx['zero']}"
                     all_models.append(m)
                     seen.add(m)
-        
+        else:
+            # Lv0（含已降级用户）：仅公开模型
+            public_models = self._storage._str_to_list(cfg.get("model_list", ""))
+            for i, m in enumerate(public_models, 1):
+                mid = f"zero_{i}"
+                model_id_map[m] = mid
+                all_models.append(m)
+            level_label = "Lv0（公开）"
+
         return level_label, model_id_map, all_models
 
     async def cmd_models(self, event):
@@ -285,6 +293,11 @@ class UserCommands:
                 yield event.plain_result(f"无此模型的使用权限\n\n**公开模型 (Lv0):**\n{available}")
                 return
         else:
+            # 降级为 Lv0 的用户也不允许切换群模型
+            user_level = umo_data.get("active_level", umo_data.get("level", "1"))
+            if group_id and user_level == "0":
+                yield event.plain_result("你的赞助已到期，无法切换群模型")
+                return
             has_permission, prefixes = self._user_manager.has_model_permission(umo_data, model_name)
             if not has_permission:
                 model_lines = [f"{i}. {m}" for i, m in enumerate(prefixes, 1)]

@@ -79,27 +79,83 @@ class AdminCommands:
             return
 
         user_id = found.get("user_id", "")
+        plan_id = found.get("plan_id", "")
+        plan_mapping = self._plan_manager.get_plan_mapping()
+
+        # 确定订单对应的方案信息
+        plan_info = plan_mapping.get(plan_id)
+        if not plan_info:
+            plan_info = self._plan_manager.verify_and_get_plan(plan_id)
+        if not plan_info:
+            self._wire(f"[AfdianModel] 重置: 订单{order_no}的方案{plan_id}未找到映射，仅清理绑定")
+            plan_days = 0
+            plan_level = "1"
+        else:
+            plan_days = plan_info.get("days", 0)
+            # 从配置直接判定等级，避免依赖 get_plan_mapping 中缺失的 level 字段
+            cfg = self._config_fn()
+            if plan_id == cfg.get("plan_id_2", "").strip():
+                plan_level = "2"
+            elif plan_id == cfg.get("plan_id_1", "").strip():
+                plan_level = "1"
+            else:
+                plan_level = plan_info.get("level", "1")
 
         umo_key = self._storage.get_user_mapping(user_id)
+        deducted_msg = ""
         if umo_key:
             umo_data = sp.get(umo_key, {})
             if umo_data:
+                umo_data = dict(umo_data)
+                # 迁移旧数据
+                umo_data = StorageManager.migrate_umo_data(umo_data, self._wire)
+
+                # 从 used_orders 中移除此订单
                 used_orders = umo_data.get("used_orders", [])
                 if order_no in used_orders:
                     used_orders.remove(order_no)
                     umo_data["used_orders"] = used_orders
+                    self._wire(f"[AfdianModel] 重置: 从用户数据移除订单{order_no}")
+
+                # 扣减对应等级的天数
+                if plan_days > 0:
+                    if plan_level == "2":
+                        old_l2 = umo_data.get("l2_days", 0)
+                        umo_data["l2_days"] = max(0, old_l2 - plan_days)
+                        deducted = old_l2 - umo_data["l2_days"]
+                        deducted_msg = f"，已扣减 Lv2 {deducted} 天"
+                        # 如果 Lv2 归零，降级到 Lv1
+                        if umo_data["l2_days"] <= 0 and umo_data.get("l1_days", 0) > 0:
+                            umo_data["active_level"] = "1"
+                            deducted_msg += "，已切换至 Lv1"
+                    else:
+                        old_l1 = umo_data.get("l1_days", 0)
+                        umo_data["l1_days"] = max(0, old_l1 - plan_days)
+                        deducted = old_l1 - umo_data["l1_days"]
+                        deducted_msg = f"，已扣减 Lv1 {deducted} 天"
+
+                umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
+
+                # 余额归零 → 降为 Lv0
+                if umo_data["remaining_days"] <= 0 or not used_orders:
+                    umo_data["active_level"] = "0"
+                    umo_data["level"] = "0"
+                    umo_data["l1_days"] = 0
+                    umo_data["l2_days"] = 0
+                    umo_data["remaining_days"] = 0
                     self._storage.set_umo_data_by_key(umo_key, umo_data)
-                    self._wire(f"[AfdianModel] 从用户数据中移除订单: {order_no}")
-                if not used_orders:
-                    self._storage.remove_umo_by_key(umo_key)
                     self._storage.unregister_umo(umo_key)
-                    self._storage.remove_user_mapping(user_id)
-                    self._wire(f"[AfdianModel] 用户数据已销毁: {user_id}")
+                    deducted_msg += "，余额归零已降为 Lv0"
+                    self._wire(f"[AfdianModel] 重置: 用户{user_id}余额归零，降为Lv0")
+                else:
+                    self._storage.set_umo_data_by_key(umo_key, umo_data)
 
         self._storage.unmark_order_processed(order_no)
 
-        self._wire(f"[AfdianModel] 订单重置成功: order={order_no} user={user_id}")
-        yield event.plain_result(f"订单 {order_no} 已重置，绑定信息已销毁，可以重新绑定")
+        self._wire(f"[AfdianModel] 订单重置成功: order={order_no} user={user_id}{deducted_msg}")
+        yield event.plain_result(
+            f"订单 {order_no} 已重置{deducted_msg}，可以重新绑定"
+        )
 
     async def cmd_reset_all(self, event, is_admin_fn):
         if not await is_admin_fn(event):

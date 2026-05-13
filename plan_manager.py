@@ -1,12 +1,12 @@
 from astrbot.core import sp
-from .storage import StorageManager, SP_PLAN_MAPPING
+from .storage import SP_PLAN_MAPPING
 
 
 class PlanManager:
-    def __init__(self, config_fn, wire_fn=None):
+    def __init__(self, config_fn, storage, wire_fn=None):
         self._config_fn = config_fn
+        self._storage = storage
         self._wire = wire_fn or print
-        self._storage = StorageManager(wire_fn)
 
     def sync_plan_mapping(self):
         existing = {}

@@ -35,7 +35,7 @@ class AfdianModelPlugin(Star):
         self._config_manager = ConfigManager(self._wire)
         self._storage = StorageManager(self._wire)
         self._storage.restore_state()
-        self._plan_manager = PlanManager(self._config, self._wire)
+        self._plan_manager = PlanManager(self._config, self._storage, self._wire)
         self._user_manager = UserManager(self._storage, self._plan_manager, self._wire)
 
         self._user_commands = UserCommands(
