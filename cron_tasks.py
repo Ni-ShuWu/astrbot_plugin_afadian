@@ -74,6 +74,7 @@ class CronTasks:
                     if key in active_umos:
                         active_umos.remove(key)
                 sp.put(SP_ACTIVE_UMOS, active_umos)
+                self._storage.persist()
                 remaining = len(active_umos)
                 self._wire(
                     f"[AfdianModel] Daily OK | Bindings: {total} -> {remaining} | "
@@ -146,6 +147,7 @@ class CronTasks:
                 used_orders.append(out_trade_no)
                 umo_data["used_orders"] = used_orders
                 sp.put(umo_key, umo_data)
+                self._storage.persist()
                 self._wire(
                     f"[AfdianModel] 用户{user_id}累加{days}天，剩余{umo_data['remaining_days']}天 "
                     f"订单{order.get('out_trade_no','')} 下单时间"

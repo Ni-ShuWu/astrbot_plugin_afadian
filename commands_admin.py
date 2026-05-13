@@ -88,6 +88,7 @@ class AdminCommands:
                     used_orders.remove(order_no)
                     umo_data["used_orders"] = used_orders
                     sp.put(umo_key, umo_data)
+                    self._storage.persist()
                     self._wire(f"[AfdianModel] 从用户数据中移除订单: {order_no}")
                 if not used_orders:
                     sp.put(umo_key, None)
@@ -129,11 +130,13 @@ class AdminCommands:
         for umo_key in active_umos:
             sp.put(umo_key, None)
         sp.put(SP_ACTIVE_UMOS, [])
+        self._storage.persist()
 
         all_keys = sp.keys()
         user_keys = [k for k in all_keys if k.startswith(SP_UMO_PREFIX)]
         for key in user_keys:
             sp.put(key, None)
+        self._storage.persist()
 
         self._storage.clear_orders()
 
@@ -215,6 +218,7 @@ class AdminCommands:
                     existing_prefixes.append(model_name)
                     umo_data["prefixes"] = self._plan_manager._list_to_str(existing_prefixes)
                     sp.put(umo_key, umo_data)
+                    self._storage.persist()
                     updated_users += 1
 
         self._wire(f"[AfdianModel] 方案{level}添加模型: {model_name}, 更新了 {updated_users} 个用户")
@@ -372,6 +376,7 @@ class AdminCommands:
                 if current_model == model_name:
                     sp.put(current_model_key, "默认模型")
                 sp.put(umo_key, umo_data)
+                self._storage.persist()
                 user_updates += 1
 
         self._wire(f"[AfdianModel] 模型删除: {model_name} from {removed_from}, 更新 {user_updates} 用户")
@@ -409,7 +414,7 @@ class AdminCommands:
         from astrbot.core import sp
         mapping = sp.get(SP_PLAN_MAPPING, {})
         mapping[plan_id] = {"days": days, "prefixes": self._plan_manager._list_to_str(prefixes)}
-        sp.put(SP_PLAN_MAPPING, mapping)
+        self._storage.set_plan_mapping(mapping)
         yield event.plain_result(f"方案已添加: {plan_id} -> {days}天, 前缀: {', '.join(prefixes)}")
 
     async def cmd_delplan(self, event, is_admin_fn):
@@ -435,7 +440,7 @@ class AdminCommands:
             del mapping[auto_key]
             deleted = True
         if deleted:
-            sp.put(SP_PLAN_MAPPING, mapping)
+            self._storage.set_plan_mapping(mapping)
             yield event.plain_result(f"方案已删除: {plan_id}")
         else:
             yield event.plain_result("方案不存在")
