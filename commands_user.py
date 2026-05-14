@@ -3,6 +3,7 @@ from .config import ConfigManager
 from .storage import StorageManager
 from .plan_manager import PlanManager
 from .user_manager import UserManager
+from datetime import datetime, timedelta
 
 
 class UserCommands:
@@ -118,6 +119,16 @@ class UserCommands:
             yield event.plain_result("方案未配置，请联系管理员")
             return
 
+        # 赞助过期校验：订单购买时间 + 方案天数 < 当前时间则拒绝
+        plan_days = plan.get("days", 0)
+        create_time = order.get("create_time", 0)
+        if create_time and plan_days > 0:
+            order_expire = datetime.fromtimestamp(create_time) + timedelta(days=plan_days)
+            if datetime.now() > order_expire:
+                self._wire(f"[AfdianModel] 订单{order_no}已超赞助有效期, create_time={create_time} days={plan_days}")
+                yield event.plain_result(f"该订单已超过赞助有效期（{order_expire.strftime('%Y-%m-%d')}），无法绑定")
+                return
+
         if self._storage.is_order_processed(order_no):
             self._wire(f"[AfdianModel] 订单{order_no}已在处理列表中，跳过绑定")
             yield event.plain_result("该订单已被使用")
@@ -126,7 +137,6 @@ class UserCommands:
         self._storage.mark_order_processed(order_no)
 
         umo = event.unified_msg_origin
-        create_time = order.get("create_time", 0)
 
         user_id = order.get("user_id", "")
         existing_umo_key = self._storage.get_user_mapping(user_id)
