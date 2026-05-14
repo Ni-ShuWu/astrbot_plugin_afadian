@@ -36,6 +36,15 @@ class UserManager:
         umo_data = self._storage.get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
 
+        # 基于订单购买时间计算实际剩余天数，而非绑定时间
+        if create_time:
+            base_time = datetime.fromtimestamp(create_time)
+            elapsed_days = max(0, (datetime.now() - base_time).days)
+            effective_days = max(0, days - elapsed_days)
+        else:
+            elapsed_days = 0
+            effective_days = days
+
         if umo_data:
             umo_data = self._migrate_umo_data(umo_data)
             used_orders = umo_data.get("used_orders", [])
@@ -43,12 +52,12 @@ class UserManager:
                 self._wire(f"[AfdianModel] 订单{order_no}已在用户数据中，跳过绑定")
                 return umo_data
 
-            # 按等级累加天数
+            # 按等级累加天数（基于订单购买时间调整）
             if level == "2":
-                umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
+                umo_data["l2_days"] = umo_data.get("l2_days", 0) + effective_days
                 umo_data["active_level"] = "2"  # 二级优先消耗
             else:
-                umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
+                umo_data["l1_days"] = umo_data.get("l1_days", 0) + effective_days
                 if umo_data.get("active_level", "0") != "2":
                     umo_data["active_level"] = "1"
 
@@ -65,17 +74,18 @@ class UserManager:
                 used_orders.append(order_no)
                 umo_data["used_orders"] = used_orders
         else:
+            # 新用户：基于订单购买时间计算实际剩余
             umo_data = {
-                "remaining_days": days,
+                "remaining_days": effective_days,
                 "prefixes": self._storage._list_to_str(prefixes),
                 "order_time": order_time,
-                "expire_time": (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"),
+                "expire_time": (datetime.fromtimestamp(create_time) + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S") if create_time else (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"),
                 "plan_id": plan_id,
                 "used_orders": [order_no] if order_no else [],
                 "level": level,
                 "active_level": level,
-                "l1_days": days if level == "1" else 0,
-                "l2_days": days if level == "2" else 0,
+                "l1_days": effective_days if level == "1" else 0,
+                "l2_days": effective_days if level == "2" else 0,
             }
         umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
