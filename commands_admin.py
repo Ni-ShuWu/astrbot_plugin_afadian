@@ -1,6 +1,5 @@
 import asyncio
 import os
-from datetime import datetime
 from astrbot.core import sp
 from .config import ConfigManager
 from .storage import StorageManager, SP_UMO_PREFIX
@@ -102,14 +101,6 @@ class AdminCommands:
             else:
                 plan_level = plan_info.get("level", "1")
 
-        # 基于订单购买时间计算实际生效天数（与 bind_user 一致）
-        order_create_time = found.get("create_time", 0)
-        if order_create_time:
-            elapsed = max(0, (datetime.now() - datetime.fromtimestamp(order_create_time)).days)
-            effective_days = max(0, plan_days - elapsed)
-        else:
-            effective_days = plan_days
-
         umo_key = self._storage.get_user_mapping(user_id)
         deducted_msg = ""
         if umo_key:
@@ -130,7 +121,7 @@ class AdminCommands:
                 if plan_days > 0:
                     if plan_level == "2":
                         old_l2 = umo_data.get("l2_days", 0)
-                        umo_data["l2_days"] = max(0, old_l2 - effective_days)
+                        umo_data["l2_days"] = max(0, old_l2 - plan_days)
                         deducted = old_l2 - umo_data["l2_days"]
                         deducted_msg = f"，已扣减 Lv2 {deducted} 天"
                         # 如果 Lv2 归零，降级到 Lv1
@@ -139,7 +130,7 @@ class AdminCommands:
                             deducted_msg += "，已切换至 Lv1"
                     else:
                         old_l1 = umo_data.get("l1_days", 0)
-                        umo_data["l1_days"] = max(0, old_l1 - effective_days)
+                        umo_data["l1_days"] = max(0, old_l1 - plan_days)
                         deducted = old_l1 - umo_data["l1_days"]
                         deducted_msg = f"，已扣减 Lv1 {deducted} 天"
 
