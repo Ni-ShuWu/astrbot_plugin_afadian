@@ -364,22 +364,34 @@ class UserCommands:
         level = umo_data.get("active_level", umo_data.get("level", "1"))
         l1_days = umo_data.get("l1_days", 0)
         l2_days = umo_data.get("l2_days", 0)
-        remaining = umo_data.get("remaining_days", 0)
+
+        # 基于 expire_time 实时计算剩余时间
+        expire_str = umo_data.get("expire_time", "")
+        try:
+            expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+            remaining_seconds = (expire_dt - datetime.now()).total_seconds()
+            if remaining_seconds > 0:
+                remaining_days = max(0, int(remaining_seconds // 86400))
+                remaining_hours = int((remaining_seconds % 86400) // 3600)
+                remaining_str = f"{remaining_days} 天 {remaining_hours} 小时"
+            else:
+                remaining_str = "已过期"
+        except Exception:
+            remaining_str = f"{umo_data.get('remaining_days', 0)} 天"
         
         status_lines = [
             f"🏷️ 身份等级：Lv{level}",
-            f"下单时间：{umo_data.get('order_time', '未知')}",
-            f"赞助方案：{umo_data.get('plan_id', '未知')}",
+            f"激活时间：{umo_data.get('order_time', '未知')}",
+            f"剩余时间：{remaining_str}",
+            f"过期时间：{umo_data.get('expire_time', '未知')}",
         ]
         if l2_days > 0:
             active_mark = " ▶ 消耗中" if level == "2" else "（暂停）"
-            status_lines.append(f"二级剩余：{l2_days} 天{active_mark}")
+            status_lines.append(f"二级余量：{l2_days} 天{active_mark}")
         if l1_days > 0:
             active_mark = " ▶ 消耗中" if level == "1" else "（暂停）"
-            status_lines.append(f"一级剩余：{l1_days} 天{active_mark}")
-        status_lines.append(f"总剩余天数：{remaining}")
+            status_lines.append(f"一级余量：{l1_days} 天{active_mark}")
         status_lines.append(f"当前模型：{current}")
-        status_lines.append(f"到期时间：{umo_data.get('expire_time', '未知')}")
         
         yield event.plain_result("\n".join(status_lines))
 
