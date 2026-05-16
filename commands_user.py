@@ -362,8 +362,8 @@ class UserCommands:
             return
         
         level = umo_data.get("active_level", umo_data.get("level", "1"))
-        l1_days = umo_data.get("l1_days", 0)
-        l2_days = umo_data.get("l2_days", 0)
+        l1_stored = umo_data.get("l1_days", 0)
+        l2_stored = umo_data.get("l2_days", 0)
 
         # 基于 expire_time 实时计算剩余时间
         expire_str = umo_data.get("expire_time", "")
@@ -371,13 +371,29 @@ class UserCommands:
             expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
             remaining_seconds = (expire_dt - datetime.now()).total_seconds()
             if remaining_seconds > 0:
-                remaining_days = max(0, int(remaining_seconds // 86400))
+                remaining_days_realtime = max(0, int(remaining_seconds // 86400))
                 remaining_hours = int((remaining_seconds % 86400) // 3600)
-                remaining_str = f"{remaining_days} 天 {remaining_hours} 小时"
+                remaining_str = f"{remaining_days_realtime} 天 {remaining_hours} 小时"
+                # 实时分摊活跃等级余量：活跃等级 = 总剩余 - 暂停等级存储值
+                if level == "2":
+                    l1_realtime = l1_stored  # Lv1 暂停不消耗
+                    l2_realtime = max(0, remaining_days_realtime - l1_stored)
+                else:
+                    l2_realtime = l2_stored  # Lv2 暂停不消耗
+                    l1_realtime = remaining_days_realtime  # Lv1 消耗中
             else:
                 remaining_str = "已过期"
+                l1_realtime = 0
+                l2_realtime = 0
         except Exception:
             remaining_str = f"{umo_data.get('remaining_days', 0)} 天"
+            l1_realtime = l1_stored
+            l2_realtime = l2_stored
+
+        # 修复 "默认模型"：未设置时取前缀列表第一项
+        if current == "默认模型":
+            prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
+            current = prefixes[0] if prefixes else "未设置（/afdian_switch 切换）"
         
         status_lines = [
             f"🏷️ 身份等级：Lv{level}",
@@ -385,12 +401,12 @@ class UserCommands:
             f"剩余时间：{remaining_str}",
             f"过期时间：{umo_data.get('expire_time', '未知')}",
         ]
-        if l2_days > 0:
+        if l2_realtime > 0:
             active_mark = " ▶ 消耗中" if level == "2" else "（暂停）"
-            status_lines.append(f"二级余量：{l2_days} 天{active_mark}")
-        if l1_days > 0:
+            status_lines.append(f"二级余量：{l2_realtime} 天{active_mark}")
+        if l1_realtime > 0:
             active_mark = " ▶ 消耗中" if level == "1" else "（暂停）"
-            status_lines.append(f"一级余量：{l1_days} 天{active_mark}")
+            status_lines.append(f"一级余量：{l1_realtime} 天{active_mark}")
         status_lines.append(f"当前模型：{current}")
         
         yield event.plain_result("\n".join(status_lines))
