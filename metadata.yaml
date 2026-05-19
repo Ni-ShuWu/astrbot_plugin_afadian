@@ -3,7 +3,7 @@ version: "v2.5.4"
 display_name: "爱发电模型订阅"
 description: "基于爱发电赞助的LLM模型自助切换插件 - 支持订单绑定/模型切换/权限管理"
 author: "N(Ni-ShuWu)&C(CLYAE[KeLai])"
-license: "MIT"
+license: "AGPL-3.0"
 homepage: "https://github.com/Ni-ShuWu/astrbot_plugin_afadian"
 repo: "https://github.com/Ni-ShuWu/astrbot_plugin_afadian"
 tags: ["afdian", "model", "subscription", "llm", "sponsor"]
