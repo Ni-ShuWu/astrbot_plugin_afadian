@@ -102,10 +102,8 @@
 > 友情提醒：本插件大部分为AI生成，不一定保证能用……
 
 
-## 🧪 CI 测试说明
+## 📄 许可证
 
-此提交由自动化工作流生成，用于验证 PR 创建与自动合并流程。
+本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0)** 开源。
 
-> 测试时间: 2026-05-12T23:02:40Z
-> Token: Classic (ghp_...)
-> 方法: git push + GitHub REST API
+> 本项目是 [AstrBot](https://github.com/Soulter/AstrBot) 的插件，母项目 [AstrBot](https://github.com/Soulter/AstrBot) 同样采用 AGPL-3.0 协议。根据 AGPL-3.0 第 13 条，若您修改本插件并通过网络提供服务，必须向用户公开修改后的源代码。
