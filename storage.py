@@ -208,8 +208,13 @@ class StorageManager:
         if not self._batch_depth:
             self._dump_state()
 
+    @staticmethod
+    def _default_model() -> str:
+        """AstrBot 配置文件中的全局默认模型名"""
+        return sp.get("curr_provider", "") or "默认模型"
+
     def get_current_model(self, umo) -> str:
-        return sp.get(self._umo_key(umo) + ":current", "默认模型")
+        return sp.get(self._umo_key(umo) + ":current", self._default_model())
 
     def set_current_model(self, umo, model: str):
         sp.put(self._umo_key(umo) + ":current", model)

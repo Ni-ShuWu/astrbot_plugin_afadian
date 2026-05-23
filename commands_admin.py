@@ -311,7 +311,7 @@ class AdminCommands:
                     changed = True
                     # 如果当前模型被移除，重置为默认
                     if sp.get(umo_key + ":current", "") == mn:
-                        self._storage.set_current_model_by_key(umo_key, "默认模型")
+                        self._storage.set_current_model_by_key(umo_key, StorageManager._default_model())
                         reset_users += 1
 
             if changed:
@@ -408,7 +408,7 @@ class AdminCommands:
                     results.append((model_name, loc_tags, False, err_msg))
 
             # 恢复管理员原来的模型
-            if original_model and original_model != "默认模型":
+            if original_model and original_model != StorageManager._default_model():
                 try:
                     await context.provider_manager.set_provider(
                         original_model, ProviderType.CHAT_COMPLETION, umo

@@ -390,10 +390,11 @@ class UserCommands:
             l1_realtime = l1_stored
             l2_realtime = l2_stored
 
-        # 修复 "默认模型"：未设置时取前缀列表第一项
+        # 兜底：curr_provider 为空时尝试取前缀列表首项
         if current == "默认模型":
             prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
-            current = prefixes[0] if prefixes else "未设置（/afdian_switch 切换）"
+            if prefixes:
+                current = f"{prefixes[0]}（默认）"
         
         status_lines = [
             f"🏷️ 身份等级：Lv{level}",
