@@ -7,6 +7,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core import sp
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .afdian_api import AfdianAPI
 from .config import ConfigManager
@@ -18,9 +19,11 @@ from .commands_admin import AdminCommands
 from .cron_tasks import CronTasks
 
 
+PLUGIN_NAME = "astrbot_plugin_afdian_model"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(PLUGIN_DIR, "data")
-PLUGIN_LOG_PATH = os.path.join(DATA_DIR, "plugin.log")
+FRAMEWORK_DATA_DIR = os.path.join(get_astrbot_data_path(), "plugin_data", PLUGIN_NAME)
+DATA_DIR = FRAMEWORK_DATA_DIR
+PLUGIN_LOG_PATH = os.path.join(FRAMEWORK_DATA_DIR, "plugin.log")
 
 
 class AfdianModelPlugin(Star):
@@ -32,8 +35,8 @@ class AfdianModelPlugin(Star):
 
         self._init_data_dir()
 
-        self._config_manager = ConfigManager(self._wire)
-        self._storage = StorageManager(self._wire)
+        self._config_manager = ConfigManager(DATA_DIR, self._wire)
+        self._storage = StorageManager(DATA_DIR, self._wire)
         self._storage.restore_state()
         self._plan_manager = PlanManager(self._config, self._storage, self._wire)
         self._user_manager = UserManager(self._storage, self._plan_manager, self._wire)
@@ -78,38 +81,62 @@ class AfdianModelPlugin(Star):
         getattr(self._plog, level)(msg)
 
     def _config(self) -> dict:
+        """获取合并后的有效配置。
+        优先级：AstrBot WebUI 配置(_star_config) > plugin_config.json 缓存。
+        任何一方有值的 key 都会被保留，_star_config 的值优先。
+        合并后写回 plugin_config.json 确保崩溃恢复时有完整数据。
+        """
         try:
-            plugin_cfg = self._config_manager.load_plugin_config()
-            if plugin_cfg:
-                return plugin_cfg
+            star_cfg = self._star_config if isinstance(self._star_config, dict) else {}
+            file_cfg = self._config_manager.load_plugin_config()
 
-            try:
-                plugin_dir = os.path.dirname(DATA_DIR)
-                astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
+            # 尝试 AstrBot 旧配置迁移（仅当双方都为空时）
+            if not star_cfg and not file_cfg:
+                migrated = self._try_migrate_astrbot_config()
+                if migrated:
+                    self._config_manager.save_plugin_config(migrated)
+                    return migrated
 
-                astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json")
-                if os.path.exists(astrbot_cfg_path):
-                    import json
-                    self._wire(f"[AfdianModel] 尝试从 AstrBot 配置迁移: {astrbot_cfg_path}", "info")
-                    with open(astrbot_cfg_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        if content.startswith('\ufeff'):
-                            content = content[1:]
-                        astrbot_cfg = json.loads(content)
-                        if astrbot_cfg:
-                            self._config_manager.save_plugin_config(astrbot_cfg)
-                            return astrbot_cfg
-            except Exception as e:
-                self._wire(f"[AfdianModel] 迁移 AstrBot 配置失败: {e}", "warning")
+            # 合并：star_cfg 优先，file_cfg 补充缺失的 key
+            merged = dict(file_cfg) if file_cfg else {}
+            star_keys = []
+            for k, v in star_cfg.items():
+                if v or k not in merged:
+                    merged[k] = v
+                    star_keys.append(k)
 
-            cfg = self._star_config if isinstance(self._star_config, dict) and self._star_config else {}
-            if cfg:
-                self._config_manager.save_plugin_config(cfg)
-            self._wire(f"[AfdianModel] 使用初始化配置: keys={list(cfg.keys()) if cfg else 'EMPTY'}", "info")
-            return cfg
+            if star_keys:
+                self._wire(f"[AfdianModel] 配置合并: WebUI覆盖 {star_keys}", "info")
+
+            # 写回以保持 plugin_config.json 与 WebUI 同步
+            if merged:
+                self._config_manager.save_plugin_config(merged)
+
+            return merged
         except Exception as e:
             self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
             return {}
+
+    def _try_migrate_astrbot_config(self) -> dict:
+        """尝试从 AstrBot 旧配置迁移，成功返回 dict，失败返回 {}"""
+        try:
+            plugin_dir = os.path.dirname(DATA_DIR) if DATA_DIR != FRAMEWORK_DATA_DIR else PLUGIN_DIR
+            astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
+            astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", f"{PLUGIN_NAME}_config.json")
+            if os.path.exists(astrbot_cfg_path):
+                import json
+                self._wire(f"[AfdianModel] 尝试从 AstrBot 配置迁移: {astrbot_cfg_path}", "info")
+                with open(astrbot_cfg_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if content.startswith('\ufeff'):
+                        content = content[1:]
+                    astrbot_cfg = json.loads(content)
+                    if astrbot_cfg:
+                        self._wire(f"[AfdianModel] 旧配置迁移成功: {list(astrbot_cfg.keys())}", "info")
+                        return astrbot_cfg
+        except Exception as e:
+            self._wire(f"[AfdianModel] 迁移 AstrBot 配置失败: {e}", "warning")
+        return {}
 
     def _get_api(self):
         cfg = self._config()

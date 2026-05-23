@@ -29,9 +29,11 @@ class UserManager:
                 new_data = sp.get(umo_key, {})
                 if not new_data:
                     new_data = dict(old_data)
+                self._storage.begin_batch()
                 self._storage.set_umo_data(umo, new_data)
                 self._storage.remove_umo_by_key(existing)
                 self._storage.unregister_umo(existing)
+                self._storage.end_batch()
 
         umo_data = self._storage.get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
@@ -81,9 +83,11 @@ class UserManager:
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
+        self._storage.begin_batch()
         self._storage.set_umo_data(umo, umo_data)
         self._storage.register_umo(umo_key)
         self._storage.set_user_mapping(user_id, umo_key)
+        self._storage.end_batch()
         return umo_data
 
     def get_model_list(self, config_fn) -> list:

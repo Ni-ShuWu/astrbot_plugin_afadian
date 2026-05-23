@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from astrbot.core import sp
 
 SP_PLAN_MAPPING = "afdian_model:plan_mapping"
@@ -8,33 +9,45 @@ SP_UMO_PREFIX = "afdian_model:umo:"
 SP_BY_AFDIAN = "afdian_model:by_afdian:"
 SP_USER_INDEX = "afdian_model:user_index"
 
-PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(PLUGIN_DIR, "data")
-ORDERS_PATH = os.path.join(DATA_DIR, "processed_orders.json")
-PERSISTENCE_PATH = os.path.join(DATA_DIR, "persistence.json")
-
 
 class StorageManager:
-    def __init__(self, wire_fn=None):
+    def __init__(self, data_dir: str, wire_fn=None):
         self._wire = wire_fn or print
+        self._data_dir = data_dir
+        self._orders_path = os.path.join(data_dir, "processed_orders.json")
+        self._persistence_path = os.path.join(data_dir, "persistence.json")
         self._processed_orders = self._load_processed_orders()
+        self._lock = threading.Lock()
+        self._batch_depth = 0
 
     def _load_processed_orders(self) -> set:
         try:
-            if os.path.exists(ORDERS_PATH):
-                with open(ORDERS_PATH, "r", encoding="utf-8") as f:
+            if os.path.exists(self._orders_path):
+                with open(self._orders_path, "r", encoding="utf-8") as f:
                     return set(json.load(f))
         except Exception:
             pass
         return set()
 
     def _save_processed_orders(self):
+        with self._lock:
+            try:
+                os.makedirs(self._data_dir, exist_ok=True)
+                tmp_path = self._orders_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(list(self._processed_orders), f)
+                os.replace(tmp_path, self._orders_path)
+            except Exception as e:
+                self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
+
+    def _save_processed_orders_nolock(self):
+        """内部使用（调用方已持有 _lock）"""
         try:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            tmp_path = ORDERS_PATH + ".tmp"
+            os.makedirs(self._data_dir, exist_ok=True)
+            tmp_path = self._orders_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(list(self._processed_orders), f)
-            os.replace(tmp_path, ORDERS_PATH)
+            os.replace(tmp_path, self._orders_path)
         except Exception as e:
             self._wire(f"[AfdianModel] 保存订单记录失败: {e}", "error")
 
@@ -42,21 +55,24 @@ class StorageManager:
         return order_no in self._processed_orders
 
     def mark_order_processed(self, order_no: str):
-        self._processed_orders.add(order_no)
-        self._save_processed_orders()
+        with self._lock:
+            self._processed_orders.add(order_no)
+            self._save_processed_orders_nolock()
 
     def unmark_order_processed(self, order_no: str):
-        self._processed_orders.discard(order_no)
-        self._save_processed_orders()
+        with self._lock:
+            self._processed_orders.discard(order_no)
+            self._save_processed_orders_nolock()
 
     def clear_orders(self):
-        self._processed_orders.clear()
-        self._save_processed_orders()
-        try:
-            if os.path.exists(ORDERS_PATH):
-                os.remove(ORDERS_PATH)
-        except Exception:
-            pass
+        with self._lock:
+            self._processed_orders.clear()
+            self._save_processed_orders_nolock()
+            try:
+                if os.path.exists(self._orders_path):
+                    os.remove(self._orders_path)
+            except Exception:
+                pass
 
     def full_reset(self) -> dict:
         """完全清除所有存储数据（订单记录 + 用户数据 + 映射关系）。
@@ -96,7 +112,7 @@ class StorageManager:
         sp.put(SP_USER_INDEX, [])
 
         # 4. 删除持久化文件
-        for path in (PERSISTENCE_PATH,):
+        for path in (self._persistence_path,):
             try:
                 if os.path.exists(path):
                     os.remove(path)
@@ -121,7 +137,8 @@ class StorageManager:
     def set_umo_data(self, umo, data: dict):
         key = self._umo_key(umo)
         sp.put(key, data)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def get_umo_data_by_key(self, umo_key: str) -> dict:
         """直接通过 umo_key 获取 umo 数据，避免 key→umo→key 的来回转换"""
@@ -134,41 +151,47 @@ class StorageManager:
     def set_umo_data_by_key(self, umo_key: str, data: dict):
         """直接通过 umo_key 写入数据并触发持久化"""
         sp.put(umo_key, data)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def remove_umo_by_key(self, umo_key: str):
         """清理 umo 数据及 :current 键并触发持久化"""
         sp.put(umo_key, None)
         sp.put(umo_key + ":current", None)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def register_umo(self, umo_key: str):
         active = sp.get(SP_ACTIVE_UMOS, [])
         if umo_key not in active:
             active.append(umo_key)
             sp.put(SP_ACTIVE_UMOS, active)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def unregister_umo(self, umo_key: str):
         active = sp.get(SP_ACTIVE_UMOS, [])
         if umo_key in active:
             active.remove(umo_key)
             sp.put(SP_ACTIVE_UMOS, active)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def get_active_umos(self) -> list:
         return sp.get(SP_ACTIVE_UMOS, [])
 
     def set_active_umos(self, active: list):
         sp.put(SP_ACTIVE_UMOS, active)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def get_plan_mapping(self) -> dict:
         return sp.get(SP_PLAN_MAPPING, {})
 
     def set_plan_mapping(self, mapping: dict):
         sp.put(SP_PLAN_MAPPING, mapping)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def get_user_mapping(self, user_id: str):
         return sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
@@ -176,24 +199,28 @@ class StorageManager:
     def set_user_mapping(self, user_id: str, umo_key: str):
         sp.put(f"{SP_BY_AFDIAN}{user_id}", umo_key)
         self._register_user_id(user_id)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def remove_user_mapping(self, user_id: str):
         sp.put(f"{SP_BY_AFDIAN}{user_id}", None)
         self._unregister_user_id(user_id)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def get_current_model(self, umo) -> str:
         return sp.get(self._umo_key(umo) + ":current", "默认模型")
 
     def set_current_model(self, umo, model: str):
         sp.put(self._umo_key(umo) + ":current", model)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     def set_current_model_by_key(self, umo_key: str, model: str):
         """直接通过 umo_key 设置当前模型并触发持久化"""
         sp.put(umo_key + ":current", model)
-        self._dump_state()
+        if not self._batch_depth:
+            self._dump_state()
 
     @staticmethod
     def _list_to_str(lst: list) -> str:
@@ -223,42 +250,43 @@ class StorageManager:
             sp.put(SP_USER_INDEX, idx)
 
     def _dump_state(self):
-        """将所有 sp 状态写入 persistence.json"""
-        try:
-            state = {
-                "plan_mapping": sp.get(SP_PLAN_MAPPING, {}),
-                "active_umos": sp.get(SP_ACTIVE_UMOS, []),
-                "umo_data": {},
-                "user_mappings": {},
-                "user_index": sp.get(SP_USER_INDEX, []),
-            }
-            for umo_key in state["active_umos"]:
-                data = sp.get(umo_key, {})
-                if data:
-                    state["umo_data"][umo_key] = dict(data) if isinstance(data, dict) else data
-                current = sp.get(umo_key + ":current", "")
-                if current:
-                    state["umo_data"][umo_key + ":current"] = current
-            for user_id in state["user_index"]:
-                val = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
-                if val is not None:
-                    state["user_mappings"][user_id] = val
+        """将所有 sp 状态写入 persistence.json（调用方需确保持有 _lock）"""
+        with self._lock:
+            try:
+                state = {
+                    "plan_mapping": sp.get(SP_PLAN_MAPPING, {}),
+                    "active_umos": sp.get(SP_ACTIVE_UMOS, []),
+                    "umo_data": {},
+                    "user_mappings": {},
+                    "user_index": sp.get(SP_USER_INDEX, []),
+                }
+                for umo_key in state["active_umos"]:
+                    data = sp.get(umo_key, {})
+                    if data:
+                        state["umo_data"][umo_key] = dict(data) if isinstance(data, dict) else data
+                    current = sp.get(umo_key + ":current", "")
+                    if current:
+                        state["umo_data"][umo_key + ":current"] = current
+                for user_id in state["user_index"]:
+                    val = sp.get(f"{SP_BY_AFDIAN}{user_id}", None)
+                    if val is not None:
+                        state["user_mappings"][user_id] = val
 
-            os.makedirs(DATA_DIR, exist_ok=True)
-            tmp_path = PERSISTENCE_PATH + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, PERSISTENCE_PATH)
-        except Exception as e:
-            self._wire(f"[AfdianModel] 状态持久化失败: {e}", "error")
+                os.makedirs(self._data_dir, exist_ok=True)
+                tmp_path = self._persistence_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(state, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, self._persistence_path)
+            except Exception as e:
+                self._wire(f"[AfdianModel] 状态持久化失败: {e}", "error")
 
     def restore_state(self):
         """从 persistence.json 恢复所有 sp 状态（插件重载后调用）"""
         try:
-            if not os.path.exists(PERSISTENCE_PATH):
+            if not os.path.exists(self._persistence_path):
                 self._wire("[AfdianModel] 无持久化文件，跳过恢复", "info")
                 return False
-            with open(PERSISTENCE_PATH, "r", encoding="utf-8") as f:
+            with open(self._persistence_path, "r", encoding="utf-8") as f:
                 state = json.load(f)
 
             restored = 0
@@ -285,6 +313,17 @@ class StorageManager:
         except Exception as e:
             self._wire(f"[AfdianModel] 状态恢复失败: {e}", "error")
             return False
+
+    def begin_batch(self):
+        """开始批量写入：挂起 _dump_state 直到 end_batch"""
+        self._batch_depth += 1
+
+    def end_batch(self):
+        """结束批量写入：若计数归零则执行一次 _dump_state"""
+        if self._batch_depth > 0:
+            self._batch_depth -= 1
+        if self._batch_depth == 0:
+            self._dump_state()
 
     def persist(self):
         """公开的持久化入口，供直接 sp.put 后调用"""

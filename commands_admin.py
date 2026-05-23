@@ -143,8 +143,10 @@ class AdminCommands:
                     umo_data["l1_days"] = 0
                     umo_data["l2_days"] = 0
                     umo_data["remaining_days"] = 0
+                    self._storage.begin_batch()
                     self._storage.set_umo_data_by_key(umo_key, umo_data)
                     self._storage.unregister_umo(umo_key)
+                    self._storage.end_batch()
                     deducted_msg += "，余额归零已降为 Lv0"
                     self._wire(f"[AfdianModel] 重置: 用户{user_id}余额归零，降为Lv0")
                 else:
@@ -283,6 +285,7 @@ class AdminCommands:
 
         updated_users = 0
         active_umos = self._storage.get_active_umos()
+        self._storage.begin_batch()
         for umo_key in active_umos:
             umo_data = sp.get(umo_key, {})
             if umo_data and umo_data.get("plan_id") == plan_id:
@@ -293,6 +296,7 @@ class AdminCommands:
                 umo_data["prefixes"] = self._storage._list_to_str(existing_prefixes)
                 self._storage.set_umo_data_by_key(umo_key, umo_data)
                 updated_users += 1
+        self._storage.end_batch()
 
         for mn in added:
             self._wire(f"[AfdianModel] 方案{level}添加模型: {mn}")
@@ -449,6 +453,7 @@ class AdminCommands:
         from astrbot.core import sp
         user_updates = 0
         active_umos = self._storage.get_active_umos()
+        self._storage.begin_batch()
         for umo_key in active_umos:
             umo_data = sp.get(umo_key, {})
             if not umo_data:
@@ -466,6 +471,7 @@ class AdminCommands:
                 umo_data["prefixes"] = self._storage._list_to_str(prefixes)
                 self._storage.set_umo_data_by_key(umo_key, umo_data)
                 user_updates += 1
+        self._storage.end_batch()
 
         for mn, removed in per_model.items():
             self._wire(f"[AfdianModel] 模型删除: {mn} from {removed}")
