@@ -209,14 +209,15 @@ class AdminCommands:
                 "用法: `/afdian_addmodels <方案等级> <模型名...>`\n\n"
                 "单个: `/afdian_addmodels 1 openai/gpt-5.4-mini-2026-03-17`\n"
                 "批量: `/afdian_addmodels 1 模型一 模型二 模型三`\n\n"
-                "方案等级: 0 = 公开模型, 1 = 赞助方案1, 2 = 赞助方案2"
+                "方案等级: 0 = 公开模型, 1 = 赞助方案1, 2 = 赞助方案2\n\n"
+                "💡 若模型已在其他等级中，将自动移动到目标等级"
             )
             return
 
-        level = parts[1]
+        target_level = parts[1]
         model_names = [m.strip() for m in parts[2:] if m.strip()]
 
-        if level not in ("0", "1", "2"):
+        if target_level not in ("0", "1", "2"):
             yield event.plain_result("方案等级只能是 0(公开), 1 或 2")
             return
 
@@ -226,95 +227,126 @@ class AdminCommands:
 
         cfg = self._config_fn()
 
-        # 等级0: 公开模型 (model_list)
-        if level == "0":
-            model_list_raw = cfg.get("model_list", "")
-            model_list = self._storage._str_to_list(model_list_raw)
-            added = []
-            skipped = []
-            for mn in model_names:
-                if mn in model_list:
-                    skipped.append(mn)
-                else:
-                    model_list.append(mn)
-                    added.append(mn)
-            if not added:
-                yield event.plain_result(f"所有模型已在公开模型列表中: {', '.join(model_names)}")
-                return
-            cfg["model_list"] = self._storage._list_to_str(model_list)
-            self._config_manager.save_plugin_config(cfg)
-            for mn in added:
-                self._wire(f"[AfdianModel] 公开模型添加: {mn}")
-            self._wire(f"[AfdianModel] 热同步: 公开模型列表已更新")
-            # 计算新模型的编号（在所有模型中定位）
-            indexed = []
-            for mn in added:
-                idx = model_list.index(mn)
-                indexed.append(f"  • `[zero_{idx + 1}]` {mn}")
-            msg = f"✅ 已向公开模型列表添加 {len(added)} 个模型:\n" + "\n".join(indexed)
-            msg += f"\n当前公开模型共 {len(model_list)} 个"
-            if skipped:
-                msg += f"\n已跳过(已存在): {', '.join(skipped)}"
-            yield event.plain_result(msg)
-            return
+        # 读取所有等级列表
+        model_list = self._storage._str_to_list(cfg.get("model_list", ""))
+        models_1 = self._storage._str_to_list(cfg.get("models_1", ""))
+        models_2 = self._storage._str_to_list(cfg.get("models_2", ""))
 
-        # 等级1/2: 赞助方案模型
-        models_key = f"models_{level}"
-        current_models = cfg.get(models_key, "")
-        current_list = self._storage._str_to_list(current_models)
+        LEVEL_LISTS = {"0": model_list, "1": models_1, "2": models_2}
+        LEVEL_NAMES = {"0": "公开(Lv0)", "1": "方案1(Lv1)", "2": "方案2(Lv2)"}
 
-        added = []
-        skipped = []
+        target_list = LEVEL_LISTS[target_level]
+
+        # 分类：移动(从其他等级迁入) / 新增 / 已在目标
+        moved = []      # (model_name, [from_levels], to_level)
+        added_new = []  # 全新模型
+        skipped = []    # 已在目标等级
+
         for mn in model_names:
-            if mn in current_list:
+            if mn in target_list:
                 skipped.append(mn)
-            else:
-                current_list.append(mn)
-                added.append(mn)
+                continue
 
-        if not added:
-            yield event.plain_result(f"所有模型已在方案{level}中: {', '.join(model_names)}")
+            from_levels = []
+            for lvl, lst in LEVEL_LISTS.items():
+                if lvl != target_level and mn in lst:
+                    from_levels.append(lvl)
+                    lst.remove(mn)
+
+            target_list.append(mn)
+            if from_levels:
+                moved.append((mn, from_levels, target_level))
+            else:
+                added_new.append(mn)
+
+        if not moved and not added_new:
+            yield event.plain_result(f"所有模型已在{LEVEL_NAMES[target_level]}中: {', '.join(model_names)}")
             return
 
-        cfg[models_key] = self._storage._list_to_str(current_list)
+        # 保存配置
+        cfg["model_list"] = self._storage._list_to_str(model_list)
+        cfg["models_1"] = self._storage._list_to_str(models_1)
+        cfg["models_2"] = self._storage._list_to_str(models_2)
         self._config_manager.save_plugin_config(cfg)
-
         self._plan_manager.sync_plan_mapping()
 
-        plan_id = cfg.get(f"plan_id_{level}", "")
+        # 热同步：遍历所有活跃用户，按兼容规则同步前缀
+        # Lv2 可见: models_2 + models_1 + model_list
+        # Lv1 可见: models_1 + model_list
+        # Lv0 可见: model_list
+        all_moved_models = {mn for mn, _, _ in moved}
+        all_affected = all_moved_models | set(added_new)
 
         updated_users = 0
+        reset_users = 0
         active_umos = self._storage.get_active_umos()
+
         self._storage.begin_batch()
         for umo_key in active_umos:
             umo_data = sp.get(umo_key, {})
-            if umo_data and umo_data.get("plan_id") == plan_id:
-                existing_prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
-                for mn in added:
-                    if mn not in existing_prefixes:
-                        existing_prefixes.append(mn)
-                umo_data["prefixes"] = self._storage._list_to_str(existing_prefixes)
+            if not umo_data:
+                continue
+
+            user_plan_id = umo_data.get("plan_id", "")
+            user_level = umo_data.get("active_level", umo_data.get("level", "1"))
+
+            # 判断用户可访问的等级范围
+            if user_level == "2":
+                accessible = set(models_2 + models_1 + model_list)
+            elif user_level == "1":
+                accessible = set(models_1 + model_list)
+            else:
+                accessible = set(model_list)
+
+            prefixes = self._storage._str_to_list(umo_data.get("prefixes", ""))
+            prefix_set = set(prefixes)
+            changed = False
+
+            for mn in all_affected:
+                if mn in accessible and mn not in prefix_set:
+                    prefix_set.add(mn)
+                    changed = True
+                elif mn not in accessible and mn in prefix_set:
+                    prefix_set.discard(mn)
+                    changed = True
+                    # 如果当前模型被移除，重置为默认
+                    if sp.get(umo_key + ":current", "") == mn:
+                        self._storage.set_current_model_by_key(umo_key, "默认模型")
+                        reset_users += 1
+
+            if changed:
+                umo_data["prefixes"] = self._storage._list_to_str(sorted(prefix_set))
                 self._storage.set_umo_data_by_key(umo_key, umo_data)
                 updated_users += 1
         self._storage.end_batch()
 
-        for mn in added:
-            self._wire(f"[AfdianModel] 方案{level}添加模型: {mn}")
-        self._wire(f"[AfdianModel] 热同步完成: config→plan_mapping→{updated_users}用户")
+        # 日志
+        for mn, from_levels, _ in moved:
+            from_names = ", ".join(LEVEL_NAMES[l] for l in from_levels)
+            self._wire(f"[AfdianModel] 模型移动: {mn} {from_names} → {LEVEL_NAMES[target_level]}")
+        for mn in added_new:
+            self._wire(f"[AfdianModel] 模型新增: {mn} → {LEVEL_NAMES[target_level]}")
+        self._wire(f"[AfdianModel] 热同步完成: 更新{updated_users}用户, 重置{reset_users}个当前模型")
 
-        # 计算新模型的编号
-        lvl_name = LEVEL_ID_PREFIX.get(level, "lv")
-        indexed = []
-        for mn in added:
-            idx = current_list.index(mn)
-            indexed.append(f"  • `[{lvl_name}_{idx + 1}]` {mn}")
-        msg = f"✅ 已向方案{level}添加 {len(added)} 个模型:\n" + "\n".join(indexed)
-        if plan_id:
-            msg += f"\n方案ID: {plan_id}"
-        msg += f"\n已热同步更新 {updated_users} 个活跃用户"
+        # 构建回复消息
+        lines = []
+        if moved:
+            lines.append(f"📦 **已移动 {len(moved)} 个模型到 {LEVEL_NAMES[target_level]}:**")
+            for mn, from_levels, _ in moved:
+                from_names = ", ".join(LEVEL_NAMES[l] for l in from_levels)
+                lines.append(f"  • `{mn}` ← {from_names}")
+        if added_new:
+            lvl_name = LEVEL_ID_PREFIX.get(target_level, "lv")
+            lines.append(f"\n➕ **新增 {len(added_new)} 个模型:**")
+            for i, mn in enumerate(added_new):
+                idx = target_list.index(mn) + 1
+                lines.append(f"  • `[{lvl_name}_{idx}]` {mn}")
         if skipped:
-            msg += f"\n已跳过(已存在): {', '.join(skipped)}"
-        yield event.plain_result(msg)
+            lines.append(f"\n⏭ 已跳过(已在目标): {', '.join(skipped)}")
+        lines.append(f"\n🔄 热同步: {updated_users} 用户前缀已更新")
+        if reset_users:
+            lines.append(f"⚠ {reset_users} 用户当前模型被重置为默认")
+        yield event.plain_result("\n".join(lines))
 
     async def cmd_delmodels(self, event, is_admin_fn):
         if not await is_admin_fn(event):
