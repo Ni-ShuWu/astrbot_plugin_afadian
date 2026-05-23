@@ -112,7 +112,7 @@ class CronTasks:
         self._storage.end_batch()
         # 恢复默认 provider
         current_key = key + ":current"
-        default_provider = sp.get("curr_provider", "")
+        default_provider = sp.get("curr_provider", "", scope="global", scope_id="global")
         if sp.get(current_key) and default_provider:
             try:
                 umo = json.loads(key.replace(SP_UMO_PREFIX, ""))

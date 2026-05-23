@@ -210,8 +210,8 @@ class StorageManager:
 
     @staticmethod
     def _default_model() -> str:
-        """AstrBot 配置文件中的全局默认模型名"""
-        return sp.get("curr_provider", "") or "默认模型"
+        """AstrBot 配置文件中的全局默认模型名（scope=global）"""
+        return sp.get("curr_provider", "", scope="global", scope_id="global") or "默认模型"
 
     def get_current_model(self, umo) -> str:
         return sp.get(self._umo_key(umo) + ":current", self._default_model())
