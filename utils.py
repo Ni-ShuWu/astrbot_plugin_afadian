@@ -8,6 +8,9 @@ from typing import Any, Callable
 
 PLUGIN_LOG_PREFIX = "[AfdianModel]"
 
+# 模型编号前缀映射
+LEVEL_ID_PREFIX = {"0": "zero", "1": "one", "2": "two"}
+
 
 # ── 爱发电 API 签名 ──────────────────────────────
 
