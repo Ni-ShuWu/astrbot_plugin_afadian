@@ -102,10 +102,8 @@ async def cmd_reset(svc: Services, event, is_admin_fn):
                 umo_data["l1_days"] = 0
                 umo_data["l2_days"] = 0
                 umo_data["remaining_days"] = 0
-                svc.storage.begin_batch()
                 svc.storage.set_umo_data_by_key(umo_key, umo_data)
                 svc.storage.unregister_umo(umo_key)
-                svc.storage.end_batch()
                 deducted_msg += "，余额归零已降为 Lv0"
             else:
                 svc.storage.set_umo_data_by_key(umo_key, umo_data)
@@ -252,10 +250,8 @@ async def cmd_migrateconfig(svc: Services, event, is_admin_fn):
         return
 
     try:
-        from .main import PLUGIN_DIR, FRAMEWORK_DATA_DIR
-        plugin_dir = os.path.dirname(FRAMEWORK_DATA_DIR) if FRAMEWORK_DATA_DIR and os.path.exists(FRAMEWORK_DATA_DIR) else PLUGIN_DIR
-        astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
-        astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", "astrbot_plugin_afdian_model_config.json")
+        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+        astrbot_cfg_path = os.path.join(get_astrbot_data_path(), "config", "astrbot_plugin_afdian_model_config.json")
 
         if os.path.exists(astrbot_cfg_path):
             import json

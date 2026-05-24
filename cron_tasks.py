@@ -104,10 +104,8 @@ class CronTasks:
             data["l1_days"] = 0
             data["l2_days"] = 0
             data["remaining_days"] = 0
-            self._svc.storage.begin_batch()
             self._svc.storage.set_umo_data_by_key(key, data)
             self._svc.storage.unregister_umo(key)
-            self._svc.storage.end_batch()
 
         current_key = key + ":current"
         default_provider = self._svc.sp.get("curr_provider", "", scope="global", scope_id="global")

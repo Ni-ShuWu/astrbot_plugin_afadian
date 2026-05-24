@@ -79,7 +79,6 @@ async def cmd_addmodels(svc: Services, event, is_admin_fn):
     reset_users = 0
     active_umos = svc.storage.get_active_umos()
 
-    svc.storage.begin_batch()
     for umo_key in active_umos:
         umo_data = svc.sp.get(umo_key, {}) or {}
         if not umo_data:
@@ -110,7 +109,6 @@ async def cmd_addmodels(svc: Services, event, is_admin_fn):
             umo_data["prefixes"] = _SM._list_to_str(sorted(prefix_set))
             svc.storage.set_umo_data_by_key(umo_key, umo_data)
             updated_users += 1
-    svc.storage.end_batch()
 
     for mn, from_levels, _ in moved:
         from_names = ", ".join(LEVEL_NAMES[l] for l in from_levels)
