@@ -1,3 +1,8 @@
+"""AstrBot 爱发电模型订阅插件入口。
+
+架构：AfdianModelPlugin(Star) → Services 容器 → 各命令/管理模块。
+"""
+
 import asyncio
 import logging
 import os
@@ -6,18 +11,16 @@ from logging.handlers import RotatingFileHandler
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
-from astrbot.core import sp
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .afdian_api import AfdianAPI
 from .config import ConfigManager
-from .storage import StorageManager
-from .plan_manager import PlanManager
-from .user_manager import UserManager
-from .commands_user import UserCommands
-from .commands_admin import AdminCommands
 from .cron_tasks import CronTasks
-
+from .plan_manager import PlanManager
+from .services import Services
+from .storage import StorageManager
+from .user_manager import UserManager
+from .utils import PLUGIN_LOG_PREFIX, LogFn, log_msg
 
 PLUGIN_NAME = "astrbot_plugin_afdian_model"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,38 +30,51 @@ PLUGIN_LOG_PATH = os.path.join(FRAMEWORK_DATA_DIR, "plugin.log")
 
 
 class AfdianModelPlugin(Star):
-    def __init__(self, context: Context, config: AstrBotConfig = None):
+    """爱发电赞助模型订阅插件。"""
+
+    def __init__(self, context: Context, config: AstrBotConfig = None) -> None:
         super().__init__(context)
-        self._api = None
-        self._context = context
         self._star_config = config if config else {}
+        self._api: AfdianAPI | None = None
 
-        self._init_data_dir()
+        # 日志
+        self._plog = self._init_plugin_logger()
 
-        self._config_manager = ConfigManager(DATA_DIR, self._wire)
-        self._storage = StorageManager(DATA_DIR, self._wire)
-        self._storage.restore_state()
-        self._plan_manager = PlanManager(self._config, self._storage, self._wire)
-        self._user_manager = UserManager(self._storage, self._plan_manager, self._wire)
+        # 服务容器
+        svc = self._build_services()
+        self._svc = svc
 
-        self._user_commands = UserCommands(
-            self._get_api, self._config, self._config_manager, 
-            self._storage, self._plan_manager, self._user_manager, self._wire
+        # 定时任务
+        self._cron = CronTasks(svc)
+        asyncio.create_task(self._cron.cron_daily())
+        asyncio.create_task(self._cron.cron_poll())
+
+    # ── 服务容器构建 ─────────────────────────────
+
+    def _build_services(self) -> Services:
+        """构建服务容器，一次性注入所有依赖。"""
+        cfg_mgr = ConfigManager(DATA_DIR, self._wire)
+        storage = StorageManager(DATA_DIR, self._wire)
+        storage.restore_state()
+
+        plan_mgr = PlanManager(self._config, storage, self._wire)
+        plan_mgr.sync_plan_mapping()
+
+        user_mgr = UserManager(storage, plan_mgr, self._wire)
+
+        return Services(
+            api_getter=self._get_api,
+            config_fn=self._config,
+            config_manager=cfg_mgr,
+            storage=storage,
+            plan_manager=plan_mgr,
+            user_manager=user_mgr,
+            wire=self._wire,
         )
-        self._admin_commands = AdminCommands(
-            self._get_api, self._config, self._config_manager, 
-            self._storage, self._plan_manager, self._wire
-        )
-        self._cron_tasks = CronTasks(
-            self._get_api, self._storage, self._plan_manager, self._wire
-        )
 
-        self._plan_manager.sync_plan_mapping()
+    # ── 日志 ──────────────────────────────────────
 
-        asyncio.create_task(self._cron_tasks._cron_daily())
-        asyncio.create_task(self._cron_tasks._cron_poll())
-
-    def _init_data_dir(self):
+    def _init_plugin_logger(self) -> logging.Logger:
         os.makedirs(DATA_DIR, exist_ok=True)
         try:
             fh = RotatingFileHandler(
@@ -66,199 +82,205 @@ class AfdianModelPlugin(Star):
             )
             fh.setLevel(logging.DEBUG)
             fh.setFormatter(logging.Formatter(
-                "[%(asctime)s] [%(levelname)s] %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S"
+                "[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
             ))
             plog = logging.getLogger("afdian_model")
             plog.addHandler(fh)
             plog.setLevel(logging.DEBUG)
-            self._plog = plog
-        except Exception:
-            self._plog = logger
+            return plog
+        except OSError:
+            return logger  # type: ignore[return-value]
 
-    def _wire(self, msg: str, level: str = "info"):
-        getattr(logger, level)(msg)
-        getattr(self._plog, level)(msg)
+    def _wire(self, msg: str, level: str = "info") -> None:
+        """双通道日志：AstrBot logger + 插件文件日志。"""
+        try:
+            getattr(logger, level)(f"{PLUGIN_LOG_PREFIX} {msg}")
+        except AttributeError:
+            logger.info(f"{PLUGIN_LOG_PREFIX} {msg}")
+        try:
+            getattr(self._plog, level)(msg)
+        except AttributeError:
+            self._plog.info(msg)
+
+    # ── 配置 ──────────────────────────────────────
 
     def _config(self) -> dict:
-        """获取合并后的有效配置。
-        优先级：AstrBot WebUI 配置(_star_config) > plugin_config.json 缓存。
-        任何一方有值的 key 都会被保留，_star_config 的值优先。
-        合并后写回 plugin_config.json 确保崩溃恢复时有完整数据。
-        """
+        """获取合并配置：WebUI 优先，plugin_config.json 兜底。"""
         try:
             star_cfg = self._star_config if isinstance(self._star_config, dict) else {}
-            file_cfg = self._config_manager.load_plugin_config()
+            file_cfg = self._svc.config_manager.load_plugin_config()
 
-            # 尝试 AstrBot 旧配置迁移（仅当双方都为空时）
             if not star_cfg and not file_cfg:
                 migrated = self._try_migrate_astrbot_config()
                 if migrated:
-                    self._config_manager.save_plugin_config(migrated)
+                    self._svc.config_manager.save_plugin_config(migrated)
                     return migrated
 
-            # 合并：star_cfg 优先，file_cfg 补充缺失的 key
             merged = dict(file_cfg) if file_cfg else {}
-            star_keys = []
-            for k, v in star_cfg.items():
-                if v or k not in merged:
-                    merged[k] = v
-                    star_keys.append(k)
+            star_keys = [k for k, v in star_cfg.items() if v or k not in merged]
+            for k in star_keys:
+                merged[k] = star_cfg[k]
 
             if star_keys:
-                self._wire(f"[AfdianModel] 配置合并: WebUI覆盖 {star_keys}", "info")
-
-            # 写回以保持 plugin_config.json 与 WebUI 同步
+                log_msg(self._wire, f"配置合并: WebUI覆盖 {star_keys}")
             if merged:
-                self._config_manager.save_plugin_config(merged)
-
+                self._svc.config_manager.save_plugin_config(merged)
             return merged
         except Exception as e:
-            self._wire(f"[AfdianModel] 配置读取异常: {e}", "error")
+            log_msg(self._wire, f"配置读取异常: {e}", "error")
             return {}
 
     def _try_migrate_astrbot_config(self) -> dict:
-        """尝试从 AstrBot 旧配置迁移，成功返回 dict，失败返回 {}"""
         try:
-            plugin_dir = os.path.dirname(DATA_DIR) if DATA_DIR != FRAMEWORK_DATA_DIR else PLUGIN_DIR
+            plugin_dir = PLUGIN_DIR
             astrbot_data_dir = os.path.dirname(os.path.dirname(plugin_dir))
-            astrbot_cfg_path = os.path.join(astrbot_data_dir, "config", f"{PLUGIN_NAME}_config.json")
-            if os.path.exists(astrbot_cfg_path):
-                import json
-                self._wire(f"[AfdianModel] 尝试从 AstrBot 配置迁移: {astrbot_cfg_path}", "info")
-                with open(astrbot_cfg_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    if content.startswith('\ufeff'):
-                        content = content[1:]
-                    astrbot_cfg = json.loads(content)
-                    if astrbot_cfg:
-                        self._wire(f"[AfdianModel] 旧配置迁移成功: {list(astrbot_cfg.keys())}", "info")
-                        return astrbot_cfg
-        except Exception as e:
-            self._wire(f"[AfdianModel] 迁移 AstrBot 配置失败: {e}", "warning")
+            path = os.path.join(astrbot_data_dir, "config", f"{PLUGIN_NAME}_config.json")
+            if not os.path.exists(path):
+                return {}
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if content.startswith("\ufeff"):
+                    content = content[1:]
+                cfg = json.loads(content)
+                if cfg:
+                    log_msg(self._wire, f"旧配置迁移成功: {list(cfg.keys())}")
+                    return cfg
+        except (json.JSONDecodeError, OSError) as e:
+            log_msg(self._wire, f"迁移 AstrBot 配置失败: {e}", "warning")
         return {}
 
-    def _get_api(self):
+    # ── API ───────────────────────────────────────
+
+    def _get_api(self) -> AfdianAPI | None:
         cfg = self._config()
         uid = cfg.get("afdian_user_id", "")
         token = cfg.get("afdian_token", "")
         api_base = cfg.get("afdian_api_base", "https://afdian.net")
-        self._wire(
-            f"[AfdianModel] API配置检查: user_id={'***' if uid else 'EMPTY'} "
-            f"token={'***' if token else 'EMPTY'} base={api_base}",
-            "info"
-        )
+
         if not uid or not token:
-            self._wire(
-                f"[AfdianModel] API未配置: user_id={'***' if uid else 'EMPTY'} "
-                f"token={'***' if token else 'EMPTY'}",
-                "warning"
-            )
+            log_msg(self._wire, "API未配置", "warning")
             return None
-        try:
-            self._api = AfdianAPI(uid, token, api_base, self._wire)
-            self._wire("[AfdianModel] API初始化成功")
-        except Exception as e:
-            self._wire(f"[AfdianModel] API初始化失败: {e}", "error")
-            return None
+        if self._api is None:
+            try:
+                self._api = AfdianAPI(uid, token, api_base, self._wire)
+            except ValueError as e:
+                log_msg(self._wire, f"API初始化失败: {e}", "error")
+                return None
         return self._api
+
+    # ── 权限 ──────────────────────────────────────
 
     async def _check_admin(self, event: AstrMessageEvent) -> bool:
         try:
-            config = getattr(self.context, "astrbot_config", {})
-            if not config:
-                config = getattr(self.context, "_config", {})
-            admins = config.get("admins_id", [])
-            return str(event.get_sender_id()) in admins
+            config = getattr(self.context, "astrbot_config", {}) or getattr(self.context, "_config", {})
+            return str(event.get_sender_id()) in config.get("admins_id", [])
         except Exception:
             return False
 
+    # ── 命令注册 ──────────────────────────────────
+
     @filter.command("afdian_help")
     async def cmd_help(self, event: AstrMessageEvent):
-        '''显示爱发电赞助插件使用帮助'''
-        async for res in self._user_commands.cmd_help(event):
+        """显示爱发电赞助插件使用帮助"""
+        from .commands_user import cmd_help
+        async for res in cmd_help(self._svc, event):
             yield res
 
     @filter.command("afdian_bind")
     async def cmd_bind(self, event: AstrMessageEvent):
-        '''绑定爱发电订单号，获得模型使用权限（仅私聊）'''
-        async for res in self._user_commands.cmd_bind(event):
+        """绑定爱发电订单号，获得模型使用权限（仅私聊）"""
+        from .commands_user import cmd_bind
+        async for res in cmd_bind(self._svc, event):
             yield res
 
     @filter.command("afdian_models")
     async def cmd_models(self, event: AstrMessageEvent):
-        '''查看当前可用的模型列表'''
-        async for res in self._user_commands.cmd_models(event):
+        """查看当前可用的模型列表"""
+        from .commands_user import cmd_models
+        async for res in cmd_models(self._svc, event):
             yield res
 
     @filter.command("afdian_switch")
     async def cmd_switch(self, event: AstrMessageEvent):
-        '''切换当前使用的模型（私聊为个人切换，群聊仅群主/群管可切换）'''
-        async for res in self._user_commands.cmd_switch(event, self._check_admin):
+        """切换当前使用的模型（私聊为个人切换，群聊仅群主/群管可切换）"""
+        from .commands_user import cmd_switch
+        async for res in cmd_switch(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_status")
     async def cmd_status(self, event: AstrMessageEvent):
-        '''查看赞助权限状态（剩余天数、到期时间等）'''
-        async for res in self._user_commands.cmd_status(event):
+        """查看赞助权限状态（剩余天数、到期时间等）"""
+        from .commands_user import cmd_status
+        async for res in cmd_status(self._svc, event):
             yield res
 
     @filter.command("afdian_reset")
     async def cmd_reset(self, event: AstrMessageEvent):
-        '''释放指定订单的绑定状态（管理员，仅私聊）'''
-        async for res in self._admin_commands.cmd_reset(event, self._check_admin):
+        """释放指定订单的绑定状态（管理员，仅私聊）"""
+        from .commands_admin import cmd_reset
+        async for res in cmd_reset(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_reset_all")
     async def cmd_reset_all(self, event: AstrMessageEvent):
-        '''一键清除所有缓存和持久化数据（管理员）'''
-        async for res in self._admin_commands.cmd_reset_all(event, self._check_admin):
+        """一键清除所有缓存和持久化数据（管理员）"""
+        from .commands_admin import cmd_reset_all
+        async for res in cmd_reset_all(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_addmodels")
     async def cmd_addmodels(self, event: AstrMessageEvent):
-        '''批量向方案添加模型（0=公开，1=一级，2=二级）（管理员）'''
-        async for res in self._admin_commands.cmd_addmodels(event, self._check_admin):
+        """批量向方案添加模型（管理员）"""
+        from .commands_model import cmd_addmodels
+        async for res in cmd_addmodels(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_delmodels")
     async def cmd_delmodels(self, event: AstrMessageEvent):
-        '''批量移除模型或可达性测试（管理员）'''
-        async for res in self._admin_commands.cmd_delmodels(event, self._check_admin):
+        """批量移除模型或可达性测试（管理员）"""
+        from .commands_model import cmd_delmodels
+        async for res in cmd_delmodels(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_addplan")
     async def cmd_addplan(self, event: AstrMessageEvent):
-        '''添加赞助方案（管理员）'''
-        async for res in self._admin_commands.cmd_addplan(event, self._check_admin):
+        """添加赞助方案（管理员）"""
+        from .commands_plan import cmd_addplan
+        async for res in cmd_addplan(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_delplan")
     async def cmd_delplan(self, event: AstrMessageEvent):
-        '''删除赞助方案（管理员）'''
-        async for res in self._admin_commands.cmd_delplan(event, self._check_admin):
+        """删除赞助方案（管理员）"""
+        from .commands_plan import cmd_delplan
+        async for res in cmd_delplan(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_query")
     async def cmd_query(self, event: AstrMessageEvent):
-        '''查询指定爱发电订单详情（管理员）'''
-        async for res in self._admin_commands.cmd_query(event, self._check_admin):
+        """查询指定爱发电订单详情（管理员）"""
+        from .commands_admin import cmd_query
+        async for res in cmd_query(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_getconfig")
     async def cmd_getconfig(self, event: AstrMessageEvent):
-        '''查看当前插件配置（管理员）'''
-        async for res in self._admin_commands.cmd_getconfig(event, self._check_admin):
+        """查看当前插件配置（管理员）"""
+        from .commands_admin import cmd_getconfig
+        async for res in cmd_getconfig(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_setconfig")
     async def cmd_setconfig(self, event: AstrMessageEvent):
-        '''设置插件配置项（管理员）'''
-        async for res in self._admin_commands.cmd_setconfig(event, self._check_admin):
+        """设置插件配置项（管理员）"""
+        from .commands_admin import cmd_setconfig
+        async for res in cmd_setconfig(self._svc, event, self._check_admin):
             yield res
 
     @filter.command("afdian_migrateconfig")
     async def cmd_migrateconfig(self, event: AstrMessageEvent):
-        '''从 AstrBot 旧配置迁移到插件配置（管理员）'''
-        async for res in self._admin_commands.cmd_migrateconfig(event, self._check_admin):
+        """从 AstrBot 旧配置迁移到插件配置（管理员）"""
+        from .commands_admin import cmd_migrateconfig
+        async for res in cmd_migrateconfig(self._svc, event, self._check_admin):
             yield res
