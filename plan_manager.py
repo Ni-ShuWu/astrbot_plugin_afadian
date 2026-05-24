@@ -1,99 +1,73 @@
+"""赞助方案管理 —— plan_id 匹配、模型前缀解析、方案同步。"""
+
 from astrbot.core import sp
+
 from .storage import SP_PLAN_MAPPING, StorageManager
+from .utils import list_to_str, log_msg, model_names_from_config, str_to_list
 
 
 class PlanManager:
-    def __init__(self, config_fn, storage, wire_fn=None):
+    """赞助方案管理器。"""
+
+    def __init__(self, config_fn, storage: StorageManager, wire_fn=None) -> None:
         self._config_fn = config_fn
         self._storage = storage
-        self._wire = wire_fn or print
+        self._wire = wire_fn
 
-    def sync_plan_mapping(self):
-        existing = {}
-        stored = sp.get(SP_PLAN_MAPPING, {})
-        if stored:
-            for plan_id, plan_data in stored.items():
-                if not plan_id.startswith("_auto_"):
-                    existing[plan_id] = plan_data
+    def sync_plan_mapping(self) -> None:
+        """将配置中的 Lv1/Lv2 方案同步到 sp plan_mapping。"""
+        existing: dict[str, dict] = {}
+        stored = sp.get(SP_PLAN_MAPPING, {}) or {}
+        for plan_id, plan_data in stored.items():
+            if not plan_id.startswith("_auto_"):
+                existing[plan_id] = plan_data
 
         updated = False
         for level in ("1", "2"):
             cfg = self._config_fn()
             plan_id = cfg.get(f"plan_id_{level}", "").strip()
-            prefixes = self._parse_models(cfg.get(f"models_{level}", ""))
+            prefixes = model_names_from_config(cfg.get(f"models_{level}", ""))
             if not plan_id or not prefixes:
                 continue
             days = cfg.get(f"days_{level}", 30 if level == "1" else 365)
-            existing[f"_auto_{plan_id}"] = {
-                "days": days, 
-                "prefixes": self._list_to_str(prefixes)
-            }
+            existing[f"_auto_{plan_id}"] = {"days": days, "prefixes": list_to_str(prefixes)}
             updated = True
-            self._wire(f"[AfdianModel] 自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
+            log_msg(self._wire, f"自动绑定 Lv{level}方案: {plan_id} -> {days}天 [{', '.join(prefixes)}]")
+
         if updated:
             self._storage.set_plan_mapping(existing)
 
-    def get_plan_mapping(self) -> dict:
-        mapping = sp.get(SP_PLAN_MAPPING, {})
-        result = {}
+    def get_plan_mapping(self) -> dict[str, dict]:
+        """返回清洗后的 plan_mapping（去除 _auto_ 前缀）。"""
+        mapping = sp.get(SP_PLAN_MAPPING, {}) or {}
+        result: dict[str, dict] = {}
         for plan_id, plan_data in mapping.items():
             clean_id = plan_id[6:] if plan_id.startswith("_auto_") else plan_id
             result[clean_id] = {
                 "days": plan_data.get("days", 0),
-                "prefixes": self._str_to_list(plan_data.get("prefixes", ""))
+                "prefixes": str_to_list(plan_data.get("prefixes", "")),
             }
         return result
 
     def verify_and_get_plan(self, order_plan_id: str) -> dict | None:
-        self._wire(f"[AfdianModel] 验证plan_id: {order_plan_id}", "info")
-
+        """验证订单的 plan_id 是否匹配配置中的方案，返回方案信息。"""
         cfg = self._config_fn()
-        plan_id_1 = cfg.get("plan_id_1", "").strip()
-        plan_id_2 = cfg.get("plan_id_2", "").strip()
+        for level in ("1", "2"):
+            cfg_plan = cfg.get(f"plan_id_{level}", "").strip()
+            if cfg_plan and order_plan_id == cfg_plan:
+                days = cfg.get(f"days_{level}", 30 if level == "1" else 365)
+                prefixes = model_names_from_config(cfg.get(f"models_{level}", ""))
+                log_msg(self._wire, f"匹配到 Lv{level}方案: days={days}, prefixes={prefixes}")
+                return {"days": days, "prefixes": prefixes, "level": level}
 
-        self._wire(f"[AfdianModel] 配置中的plan_id_1: {plan_id_1}", "info")
-        self._wire(f"[AfdianModel] 配置中的plan_id_2: {plan_id_2}", "info")
-
-        if plan_id_1 and order_plan_id == plan_id_1:
-            days = cfg.get("days_1", 30)
-            prefixes = self._parse_models(cfg.get("models_1", ""))
-            self._wire(f"[AfdianModel] 匹配到Lv1方案: days={days}, prefixes={prefixes}", "info")
-            return {"days": days, "prefixes": prefixes, "level": "1"}
-
-        if plan_id_2 and order_plan_id == plan_id_2:
-            days = cfg.get("days_2", 365)
-            prefixes = self._parse_models(cfg.get("models_2", ""))
-            self._wire(f"[AfdianModel] 匹配到Lv2方案: days={days}, prefixes={prefixes}", "info")
-            return {"days": days, "prefixes": prefixes, "level": "2"}
-
-        self._wire(f"[AfdianModel] 未匹配到任何方案", "warning")
+        log_msg(self._wire, f"未匹配到任何方案: plan_id={order_plan_id}", "warning")
         return None
 
     @staticmethod
-    def _parse_models(raw) -> list:
-        if isinstance(raw, list):
-            return raw
-        if isinstance(raw, str) and raw.strip():
-            return [m.strip() for m in raw.split(",") if m.strip()]
-        return []
-
-    @staticmethod
-    def _list_to_str(lst: list) -> str:
-        """委托到 StorageManager 避免重复实现"""
-        return StorageManager._list_to_str(lst)
-
-    @staticmethod
-    def _str_to_list(s: str) -> list:
-        """委托到 StorageManager 避免重复实现"""
-        return StorageManager._str_to_list(s)
-
-    def match_prefixes(self, prefix: str, model_list: list) -> list:
-        matched = []
+    def match_prefixes(prefix: str, model_list: list[str]) -> list[str]:
+        """前缀匹配模型名列表。"""
+        matched: list[str] = []
         for m in model_list:
-            if m == prefix:
-                matched.append(m)
-            elif m.startswith(prefix):
-                matched.append(m)
-            elif prefix.startswith(m) and len(m) > 0:
+            if m == prefix or m.startswith(prefix) or prefix.startswith(m):
                 matched.append(m)
         return matched
