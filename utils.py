@@ -1,11 +1,7 @@
-"""公共工具模块 —— 签名、序列化、路径、日志等全项目复用的静态方法。
-
-消除 afdian_api.py 中内联 import 和重复签名逻辑。
-"""
+"""公共工具模块 —— 签名、序列化、日志等全项目复用的静态方法。"""
 
 import hashlib
 import json
-import os
 import re
 import time
 from typing import Any, Callable
@@ -16,7 +12,7 @@ PLUGIN_LOG_PREFIX = "[AfdianModel]"
 # ── 爱发电 API 签名 ──────────────────────────────
 
 class AfdianSigner:
-    """爱发电 API 请求签名器。统一签名逻辑，消除分散在各处的重复实现。"""
+    """爱发电 API 请求签名器。"""
 
     def __init__(self, user_id: str, token: str) -> None:
         if not user_id or not token:
@@ -30,12 +26,7 @@ class AfdianSigner:
         json_params = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
         raw = f"{self._token}params{json_params}ts{ts}user_id{self._user_id}"
         sig = hashlib.md5(raw.encode()).hexdigest()
-        return {
-            "user_id": self._user_id,
-            "params": json_params,
-            "ts": ts,
-            "sign": sig,
-        }
+        return {"user_id": self._user_id, "params": json_params, "ts": ts, "sign": sig}
 
     @staticmethod
     def normalize_base_url(raw: str) -> str:
@@ -64,36 +55,6 @@ def model_names_from_config(raw: Any) -> list[str]:
     if isinstance(raw, str) and raw.strip():
         return [m.strip() for m in raw.split(",") if m.strip()]
     return []
-
-
-# ── 文件 I/O 原子写入 ──────────────────────────────
-
-def atomic_write(path: str, content: str) -> None:
-    """原子写入：先写 tmp 再 rename，防止写入中断损坏原文件。"""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.replace(tmp, path)
-
-
-def atomic_write_json(path: str, data: Any) -> None:
-    """原子写入 JSON 文件。"""
-    atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
-
-
-def safe_read_json(path: str, default: Any = None) -> Any:
-    """安全读取 JSON 文件，不存在或损坏时返回 default。"""
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-                if content.startswith("\ufeff"):
-                    content = content[1:]
-                return json.loads(content)
-    except (json.JSONDecodeError, OSError):
-        pass
-    return default
 
 
 # ── 日志 ──────────────────────────────────────────
