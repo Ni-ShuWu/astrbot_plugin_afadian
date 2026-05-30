@@ -52,6 +52,7 @@ class AfdianModelPlugin(Star):
             plan_manager=plan_mgr,
             user_manager=user_mgr,
             wire=self._wire,
+            astrbot_context=context,
         )
 
     def _init_plugin_logger(self) -> logging.Logger:

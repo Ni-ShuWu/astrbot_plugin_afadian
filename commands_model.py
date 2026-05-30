@@ -163,7 +163,7 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
         total = len(all_models)
         yield event.plain_result(f"🔍 正在对 {total} 个模型执行 API 连通性测试，请稍候...")
 
-        context = event._message_context
+        context = svc.astrbot_context
         umo = event.unified_msg_origin
         from astrbot.core.provider.entities import ProviderType
 
