@@ -193,7 +193,7 @@ async def cmd_switch(svc: Services, event, is_admin_fn):
 
     try:
         from astrbot.core.provider.entities import ProviderType
-        await event._message_context.provider_manager.set_provider(model_name, ProviderType.CHAT_COMPLETION, umo)
+        await svc.astrbot_context.provider_manager.set_provider(model_name, ProviderType.CHAT_COMPLETION, umo)
     except Exception:
         try:
             await svc.sp.session_put(umo, "provider_perf_chat_completion", model_name)
@@ -320,7 +320,7 @@ async def _is_group_admin(svc: Services, event) -> bool:
     try:
         group_id = event.get_group_id()
         sender_id = str(event.get_sender_id())
-        context = event._message_context
+        context = svc.astrbot_context
         role = await context.get_member_role(group_id, sender_id)
         if role in ("owner", "admin"):
             return True

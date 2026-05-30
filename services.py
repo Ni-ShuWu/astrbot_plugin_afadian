@@ -28,6 +28,7 @@ class Services:
     __slots__ = (
         "api_getter", "config_fn", "config_manager",
         "storage", "plan_manager", "user_manager", "wire",
+        "astrbot_context",
     )
 
     def __init__(
@@ -40,6 +41,7 @@ class Services:
         plan_manager: PlanManager,
         user_manager: UserManager,
         wire: LogFn,
+        astrbot_context = None,
     ) -> None:
         self.api_getter = api_getter
         self.config_fn = config_fn
@@ -48,6 +50,7 @@ class Services:
         self.plan_manager = plan_manager
         self.user_manager = user_manager
         self.wire = wire
+        self.astrbot_context = astrbot_context  # AstrBot Context 对象
 
     @property
     def sp(self):
