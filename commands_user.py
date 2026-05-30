@@ -316,20 +316,21 @@ def _get_available_models(svc: Services, umo_data: dict | None) -> tuple[str, di
 
 
 async def _is_group_admin(svc: Services, event) -> bool:
-    """检查发送者是否为群主或群管。"""
-    try:
-        group_id = event.get_group_id()
-        sender_id = str(event.get_sender_id())
-        context = svc.astrbot_context
-        role = await context.get_member_role(group_id, sender_id)
-        if role in ("owner", "admin"):
-            return True
-    except Exception:
-        pass
+    """检查发送者是否为群主或群管。优先读取平台下发的 group_owner/group_admins。"""
+    sender_id = str(event.get_sender_id())
+    msg_obj = event.message_obj
 
+    # 平台 API 提供的群角色信息
+    if msg_obj.group_owner and sender_id == str(msg_obj.group_owner):
+        return True
+    if msg_obj.group_admins and sender_id in [str(a) for a in msg_obj.group_admins]:
+        return True
+
+    # 静态管理员列表兜底
     cfg = svc.config_fn()
     group_admins = cfg.get("group_admins", {})
     if isinstance(group_admins, dict):
         admins = group_admins.get(str(event.get_group_id()), [])
-        return str(event.get_sender_id()) in admins
+        return sender_id in admins
+    return False
     return False
