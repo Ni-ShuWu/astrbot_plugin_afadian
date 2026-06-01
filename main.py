@@ -34,6 +34,7 @@ class AfdianModelPlugin(Star):
         self._api: AfdianAPI | None = None
         self._plog = self._init_plugin_logger()
         self._svc = self._build_services()
+        self._svc.plan_manager.sync_plan_mapping()
         self._cron = CronTasks(self._svc)
         self._tasks: list[asyncio.Task] = [
             asyncio.create_task(self._cron.cron_daily()),
@@ -50,7 +51,6 @@ class AfdianModelPlugin(Star):
         cfg_mgr = ConfigManager(self._wire)
         storage = StorageManager(self._wire)
         plan_mgr = PlanManager(self._config, storage, self._wire)
-        plan_mgr.sync_plan_mapping()
         user_mgr = UserManager(storage, plan_mgr, self._wire)
         return Services(
             api_getter=self._get_api,
