@@ -35,8 +35,16 @@ class AfdianModelPlugin(Star):
         self._plog = self._init_plugin_logger()
         self._svc = self._build_services()
         self._cron = CronTasks(self._svc)
-        asyncio.create_task(self._cron.cron_daily())
-        asyncio.create_task(self._cron.cron_poll())
+        self._tasks: list[asyncio.Task] = [
+            asyncio.create_task(self._cron.cron_daily()),
+            asyncio.create_task(self._cron.cron_poll()),
+        ]
+
+    async def terminate(self) -> None:
+        """插件卸载/重载时取消所有定时任务，防止多实例并发扣减天数。"""
+        for t in self._tasks:
+            t.cancel()
+        self._tasks.clear()
 
     def _build_services(self) -> Services:
         cfg_mgr = ConfigManager(self._wire)
