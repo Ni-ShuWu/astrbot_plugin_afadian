@@ -20,27 +20,33 @@ class CronTasks:
 
     async def cron_daily(self) -> None:
         """每日零点：遍历活跃绑定，按等级递减天数，到期降级。"""
-        while True:
-            await asyncio.sleep(self._seconds_until_next_hour(0))
-            try:
-                await self._run_daily()
-            except Exception as e:
-                log_msg(self._svc.wire, f"每日零点定时任务异常: {e}", "error")
+        try:
+            while True:
+                await asyncio.sleep(self._seconds_until_next_hour(0))
+                try:
+                    await self._run_daily()
+                except Exception as e:
+                    log_msg(self._svc.wire, f"每日零点定时任务异常: {e}", "error")
+        except asyncio.CancelledError:
+            pass  # 插件重载时静默退出
 
     async def cron_poll(self) -> None:
         """定时轮询爱发电 API，发现新订单自动标记。"""
         await asyncio.sleep(5)
-        while True:
-            api = self._svc.api_getter()
-            if not api:
-                log_msg(self._svc.wire, "Poll SKIP | API未配置", "warning")
+        try:
+            while True:
+                api = self._svc.api_getter()
+                if not api:
+                    log_msg(self._svc.wire, "Poll SKIP | API未配置", "warning")
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
+                try:
+                    await self._run_poll(api)
+                except Exception as e:
+                    log_msg(self._svc.wire, f"Poll FAIL | 异常: {e}", "error")
                 await asyncio.sleep(POLL_INTERVAL)
-                continue
-            try:
-                await self._run_poll(api)
-            except Exception as e:
-                log_msg(self._svc.wire, f"Poll FAIL | 异常: {e}", "error")
-            await asyncio.sleep(POLL_INTERVAL)
+        except asyncio.CancelledError:
+            pass  # 插件重载时静默退出
 
     # ── 内部 ──────────────────────────────────────
 
