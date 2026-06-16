@@ -100,7 +100,7 @@ async def cmd_bind(svc: Services, event):
             yield event.plain_result(f"该订单已超过赞助有效期（{order_expire.strftime('%Y-%m-%d')}），无法绑定")
             return
 
-    svc.storage.mark_order_processed(order_no)
+    await svc.storage.mark_order_processed(order_no)
 
     umo = event.unified_msg_origin
     user_id = order.get("user_id", "")
@@ -108,7 +108,7 @@ async def cmd_bind(svc: Services, event):
     if existing:
         existing_data = svc.storage.get_umo_data(umo)
         if existing_data and order_no in existing_data.get("used_orders", []):
-            svc.storage.unmark_order_processed(order_no)
+            await svc.storage.unmark_order_processed(order_no)
             yield event.plain_result("该订单已被使用")
             return
 
@@ -332,5 +332,4 @@ async def _is_group_admin(svc: Services, event) -> bool:
     if isinstance(group_admins, dict):
         admins = group_admins.get(str(event.get_group_id()), [])
         return sender_id in admins
-    return False
     return False

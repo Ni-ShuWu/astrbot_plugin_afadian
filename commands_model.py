@@ -79,36 +79,37 @@ async def cmd_addmodels(svc: Services, event, is_admin_fn):
     reset_users = 0
     active_umos = svc.storage.get_active_umos()
 
-    for umo_key in active_umos:
-        umo_data = svc.sp.get(umo_key, {}) or {}
-        if not umo_data:
-            continue
+    async with svc.storage._lock:
+        for umo_key in active_umos:
+            umo_data = svc.storage.get_umo_data_by_key(umo_key)
+            if not umo_data:
+                continue
 
-        user_level = umo_data.get("active_level", umo_data.get("level", "1"))
-        if user_level == "2":
-            accessible = set(models_2 + models_1 + model_list)
-        elif user_level == "1":
-            accessible = set(models_1 + model_list)
-        else:
-            accessible = set(model_list)
+            user_level = umo_data.get("active_level", umo_data.get("level", "1"))
+            if user_level == "2":
+                accessible = set(models_2 + models_1 + model_list)
+            elif user_level == "1":
+                accessible = set(models_1 + model_list)
+            else:
+                accessible = set(model_list)
 
-        prefix_set = set(str_to_list(umo_data.get("prefixes", "")))
-        changed = False
-        for mn in all_affected:
-            if mn in accessible and mn not in prefix_set:
-                prefix_set.add(mn)
-                changed = True
-            elif mn not in accessible and mn in prefix_set:
-                prefix_set.discard(mn)
-                changed = True
-                if svc.sp.get(umo_key + ":current", "") == mn:
-                    svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
-                    reset_users += 1
+            prefix_set = set(str_to_list(umo_data.get("prefixes", "")))
+            changed = False
+            for mn in all_affected:
+                if mn in accessible and mn not in prefix_set:
+                    prefix_set.add(mn)
+                    changed = True
+                elif mn not in accessible and mn in prefix_set:
+                    prefix_set.discard(mn)
+                    changed = True
+                    if svc.sp.get(umo_key + ":current", "") == mn:
+                        svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
+                        reset_users += 1
 
-        if changed:
-            umo_data["prefixes"] = _SM._list_to_str(sorted(prefix_set))
-            svc.storage.set_umo_data_by_key(umo_key, umo_data)
-            updated_users += 1
+            if changed:
+                umo_data["prefixes"] = _SM._list_to_str(sorted(prefix_set))
+                svc.storage.set_umo_data_by_key(umo_key, umo_data)
+                updated_users += 1
 
     for mn, from_levels, _ in moved:
         from_names = ", ".join(LEVEL_NAMES[l] for l in from_levels)
@@ -254,22 +255,23 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
 
     user_updates = 0
     active_umos = svc.storage.get_active_umos()
-    for umo_key in active_umos:
-        umo_data = svc.sp.get(umo_key, {}) or {}
-        if not umo_data:
-            continue
-        prefixes = str_to_list(umo_data.get("prefixes", ""))
-        updated = False
-        for mn in deleted_set:
-            if mn in prefixes:
-                prefixes.remove(mn)
-                updated = True
-            if svc.sp.get(umo_key + ":current", "") == mn:
-                svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
-        if updated:
-            umo_data["prefixes"] = _SM._list_to_str(prefixes)
-            svc.storage.set_umo_data_by_key(umo_key, umo_data)
-            user_updates += 1
+    async with svc.storage._lock:
+        for umo_key in active_umos:
+            umo_data = svc.storage.get_umo_data_by_key(umo_key)
+            if not umo_data:
+                continue
+            prefixes = str_to_list(umo_data.get("prefixes", ""))
+            updated = False
+            for mn in deleted_set:
+                if mn in prefixes:
+                    prefixes.remove(mn)
+                    updated = True
+                if svc.sp.get(umo_key + ":current", "") == mn:
+                    svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
+            if updated:
+                umo_data["prefixes"] = _SM._list_to_str(prefixes)
+                svc.storage.set_umo_data_by_key(umo_key, umo_data)
+                user_updates += 1
 
     for mn, removed in per_model.items():
         log_msg(svc.wire, f"模型删除: {mn} from {removed}")
