@@ -60,11 +60,16 @@ class CronTasks:
     async def _run_daily(self) -> None:
         # 每日去重：如果今日已执行过扣减，跳过
         # 防止插件重载导致 cron_daily 重复执行
-        if not self._svc.storage.acquire_daily_lock():
+        if not await self._svc.storage.acquire_daily_lock():
             log_msg(self._svc.wire, "Daily SKIP | 今日已执行过扣减")
             return
 
-        active_umos = self._svc.storage.get_active_umos()
+        # 整个扣减循环在同一个锁内完成，防止:
+        # 1. active_umos 快照在迭代过程中被其他协程修改
+        # 2. 每个用户单独加锁/释放锁之间的间隙导致数据不一致
+        async with self._svc.storage._lock:
+            active_umos = list(self._svc.storage.get_active_umos())
+
         if not active_umos:
             log_msg(self._svc.wire, "Daily OK | 0 active")
             return
@@ -72,8 +77,7 @@ class CronTasks:
         total = len(active_umos)
         expired = 0
         switched = 0
-        for key in list(active_umos):
-            # 使用原子操作读取-修改-写入，防止并发覆盖
+        for key in active_umos:
             async with self._svc.storage._lock:
                 data = self._svc.storage.get_umo_data_by_key(key)
                 if not isinstance(data, dict) or not data:
@@ -147,7 +151,9 @@ class CronTasks:
             try:
                 umo = json.loads(key.replace(SP_UMO_PREFIX, ""))
                 from astrbot.core.provider.entities import ProviderType
-                context = self._svc.sp.get("_context")
+                # 使用 astrbot_context 而非 sp.get("_context")，
+                # 后者不存在于 SharedPreferences 中，导致降级后 provider 永远无法恢复
+                context = self._svc.astrbot_context
                 if context:
                     async def _restore():
                         await context.provider_manager.set_provider(default_provider, ProviderType.CHAT_COMPLETION, umo)
