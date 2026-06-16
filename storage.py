@@ -5,6 +5,8 @@
 """
 
 import asyncio
+import copy
+import datetime
 from typing import Any, Callable
 
 from astrbot.core import sp
@@ -71,18 +73,22 @@ class StorageManager:
 
     # ── 每日扣减去重 ───────────────────────────────
 
-    def acquire_daily_lock(self) -> bool:
+    async def acquire_daily_lock(self) -> bool:
         """尝试获取每日扣减锁。返回 True 表示获取成功（今日尚未执行），False 表示已执行。
 
         使用日期字符串作为锁值，确保每天只执行一次扣减，
         防止插件重载导致 cron_daily 重复执行。
+
+        必须在 _lock 保护下执行，防止两个协程同时读到"今日未执行"
+        后都返回 True 的 TOCTOU 竞态。
         """
-        today = __import__("datetime").date.today().isoformat()
-        current_lock = sp.get(SP_DAILY_LOCK, "")
-        if current_lock == today:
-            return False  # 今日已执行
-        sp.put(SP_DAILY_LOCK, today)
-        return True
+        async with self._lock:
+            today = datetime.date.today().isoformat()
+            current_lock = sp.get(SP_DAILY_LOCK, "")
+            if current_lock == today:
+                return False  # 今日已执行
+            sp.put(SP_DAILY_LOCK, today)
+            return True
 
     # ── sp 数据读写 ───────────────────────────────
 
@@ -261,7 +267,6 @@ class StorageManager:
         get_umo_data_by_key 在返回前转换为列表。
         """
         # 深拷贝：确保修改返回值不影响 sp 内部状态
-        import copy
         data = copy.deepcopy(data)
 
         # 确保关键字段存在且有正确类型
@@ -270,11 +275,9 @@ class StorageManager:
         elif isinstance(data["prefixes"], list):
             data["prefixes"] = list_to_str(data["prefixes"])
 
-        # 确保 used_orders 是独立列表（防止浅拷贝共享引用）
+        # 确保 used_orders 存在（deepcopy 已保证独立性，无需再浅拷贝）
         if "used_orders" not in data:
             data["used_orders"] = []
-        elif isinstance(data["used_orders"], list):
-            data["used_orders"] = list(data["used_orders"])
 
         # 确保分级字段存在（兼容旧数据）
         if "l1_days" not in data:
