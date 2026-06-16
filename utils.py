@@ -60,6 +60,17 @@ def model_names_from_config(raw: Any) -> list[str]:
     return []
 
 
+# ── 输入清洗 ──────────────────────────────────────
+
+def clean_arg(value: str) -> str:
+    """清洗用户输入参数，去除误输入的尖括号及首尾空白。
+
+    防止用户将帮助文本中的 <占位符> 当作字面语法输入，
+    例如 afdian_bind<abcd1234> 或 afdian_bind <abcd1234>。
+    """
+    return value.strip().strip("<>").strip()
+
+
 # ── 日志 ──────────────────────────────────────────
 
 LogFn = Callable[[str, str], None]  # (msg, level)

@@ -145,75 +145,90 @@ class AfdianModelPlugin(Star):
     # ── 命令注册（懒 import 避免循环依赖）─────────
     @filter.command("afdian_help")
     async def cmd_help(self, event: AstrMessageEvent):
+        """显示爱发电赞助插件使用指南"""
         from .commands_user import cmd_help
         async for res in cmd_help(self._svc, event): yield res
 
     @filter.command("afdian_bind")
     async def cmd_bind(self, event: AstrMessageEvent):
+        """绑定爱发电订单号（私聊）"""
         from .commands_user import cmd_bind
         async for res in cmd_bind(self._svc, event): yield res
 
     @filter.command("afdian_models")
     async def cmd_models(self, event: AstrMessageEvent):
+        """查看当前可用模型列表（私聊）"""
         from .commands_user import cmd_models
         async for res in cmd_models(self._svc, event): yield res
 
     @filter.command("afdian_switch")
     async def cmd_switch(self, event: AstrMessageEvent):
+        """切换当前使用的模型"""
         from .commands_user import cmd_switch
         async for res in cmd_switch(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_status")
     async def cmd_status(self, event: AstrMessageEvent):
+        """查看赞助权限状态（私聊）"""
         from .commands_user import cmd_status
         async for res in cmd_status(self._svc, event): yield res
 
     @filter.command("afdian_reset")
     async def cmd_reset(self, event: AstrMessageEvent):
+        """释放指定订单绑定（管理员）"""
         from .commands_admin import cmd_reset
         async for res in cmd_reset(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_reset_all")
     async def cmd_reset_all(self, event: AstrMessageEvent):
+        """一键清除所有缓存数据（管理员）"""
         from .commands_admin import cmd_reset_all
         async for res in cmd_reset_all(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_addmodels")
     async def cmd_addmodels(self, event: AstrMessageEvent):
+        """批量添加/移动模型到指定等级（管理员）"""
         from .commands_model import cmd_addmodels
         async for res in cmd_addmodels(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_delmodels")
     async def cmd_delmodels(self, event: AstrMessageEvent):
+        """批量移除模型或执行连通性测试（管理员）"""
         from .commands_model import cmd_delmodels
         async for res in cmd_delmodels(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_addplan")
     async def cmd_addplan(self, event: AstrMessageEvent):
+        """添加赞助方案（管理员）"""
         from .commands_plan import cmd_addplan
         async for res in cmd_addplan(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_delplan")
     async def cmd_delplan(self, event: AstrMessageEvent):
+        """删除赞助方案（管理员）"""
         from .commands_plan import cmd_delplan
         async for res in cmd_delplan(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_query")
     async def cmd_query(self, event: AstrMessageEvent):
+        """查询指定订单详情（管理员）"""
         from .commands_admin import cmd_query
         async for res in cmd_query(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_getconfig")
     async def cmd_getconfig(self, event: AstrMessageEvent):
+        """查看插件配置（管理员）"""
         from .commands_admin import cmd_getconfig
         async for res in cmd_getconfig(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_setconfig")
     async def cmd_setconfig(self, event: AstrMessageEvent):
+        """设置插件配置项（管理员）"""
         from .commands_admin import cmd_setconfig
         async for res in cmd_setconfig(self._svc, event, self._check_admin): yield res
 
     @filter.command("afdian_migrateconfig")
     async def cmd_migrateconfig(self, event: AstrMessageEvent):
+        """从 AstrBot 旧配置迁移（管理员）"""
         from .commands_admin import cmd_migrateconfig
         async for res in cmd_migrateconfig(self._svc, event, self._check_admin): yield res

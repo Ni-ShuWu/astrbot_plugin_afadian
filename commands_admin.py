@@ -10,7 +10,7 @@ import os
 
 from .services import Services
 from .storage import StorageManager
-from .utils import log_msg
+from .utils import clean_arg, log_msg
 
 
 async def cmd_reset(svc: Services, event, is_admin_fn):
@@ -24,10 +24,10 @@ async def cmd_reset(svc: Services, event, is_admin_fn):
 
     parts = event.message_str.strip().split()
     if len(parts) < 2:
-        yield event.plain_result("用法: /afdian_reset <订单号>")
+        yield event.plain_result("用法: /afdian_reset 订单号（例：/afdian_reset 2025061612345678）")
         return
 
-    order_no = parts[1]
+    order_no = clean_arg(parts[1])
     if not svc.storage.is_order_processed(order_no):
         yield event.plain_result("该订单未绑定，无需重置")
         return
@@ -164,10 +164,10 @@ async def cmd_query(svc: Services, event, is_admin_fn):
 
     parts = event.message_str.strip().split()
     if len(parts) < 2:
-        yield event.plain_result("用法: /afdian_query <订单号>")
+        yield event.plain_result("用法: /afdian_query 订单号（例：/afdian_query 2025061612345678）")
         return
 
-    order_no = parts[1]
+    order_no = clean_arg(parts[1])
     api = svc.api_getter()
     if not api:
         yield event.plain_result("API未配置")
@@ -240,14 +240,15 @@ async def cmd_setconfig(svc: Services, event, is_admin_fn):
     parts = event.message_str.strip().split(maxsplit=2)
     if len(parts) < 3:
         yield event.plain_result(
-            "用法: /afdian_setconfig <key> <value>\n\n支持的key:\n"
+            "用法: /afdian_setconfig key value\n\n支持的key:\n"
             "- model_list / plan_id_1 / days_1 / models_1\n"
             "- plan_id_2 / days_2 / models_2\n"
-            "- afdian_user_id / afdian_token / afdian_api_base"
+            "- afdian_user_id / afdian_token / afdian_api_base\n\n"
+            "例: /afdian_setconfig afdian_token your_token_here"
         )
         return
 
-    key, value = parts[1], parts[2]
+    key, value = clean_arg(parts[1]), clean_arg(parts[2])
     cfg = svc.config_fn()
     cfg[key] = value
     svc.config_manager.save_plugin_config(cfg)

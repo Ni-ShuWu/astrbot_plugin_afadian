@@ -2,6 +2,7 @@
 
 from .services import Services
 from .storage import StorageManager
+from .utils import clean_arg
 
 
 async def cmd_addplan(svc: Services, event, is_admin_fn):
@@ -12,12 +13,12 @@ async def cmd_addplan(svc: Services, event, is_admin_fn):
 
     parts = event.message_str.strip().split()
     if len(parts) < 4:
-        yield event.plain_result("用法: /afdian_addplan <plan_id> <天数> <前缀1,前缀2,...>")
+        yield event.plain_result("用法: /afdian_addplan plan_id 天数 前缀（例：/afdian_addplan p_abc 30 gpt）")
         return
 
-    plan_id = parts[1]
+    plan_id = clean_arg(parts[1])
     try:
-        days = int(parts[2])
+        days = int(clean_arg(parts[2]))
     except ValueError:
         yield event.plain_result("天数必须为整数")
         return
@@ -41,10 +42,10 @@ async def cmd_delplan(svc: Services, event, is_admin_fn):
 
     parts = event.message_str.strip().split()
     if len(parts) != 2:
-        yield event.plain_result("用法: /afdian_delplan <plan_id>")
+        yield event.plain_result("用法: /afdian_delplan plan_id（例：/afdian_delplan p_abc）")
         return
 
-    plan_id = parts[1]
+    plan_id = clean_arg(parts[1])
     mapping = svc.storage.get_plan_mapping()
     auto_key = f"_auto_{plan_id}"
     deleted = False

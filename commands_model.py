@@ -5,7 +5,7 @@ from datetime import datetime
 
 from .services import Services
 from .storage import SP_UMO_PREFIX, StorageManager
-from .utils import LEVEL_ID_PREFIX, log_msg, model_names_from_config, str_to_list
+from .utils import LEVEL_ID_PREFIX, clean_arg, log_msg, model_names_from_config, str_to_list
 
 
 async def cmd_addmodels(svc: Services, event, is_admin_fn):
@@ -17,16 +17,16 @@ async def cmd_addmodels(svc: Services, event, is_admin_fn):
     parts = event.message_str.strip().split()
     if len(parts) < 3:
         yield event.plain_result(
-            "用法: `/afdian_addmodels <方案等级> <模型名...>`\n\n"
-            "单个: `/afdian_addmodels 1 openai/gpt-5.4-mini-2026-03-17`\n"
-            "批量: `/afdian_addmodels 1 模型一 模型二 模型三`\n\n"
-            "方案等级: 0 = 公开模型, 1 = 赞助方案1, 2 = 赞助方案2\n\n"
+            "用法: /afdian_addmodels 等级 模型名...\n\n"
+            "单个: /afdian_addmodels 1 openai/gpt-5.4-mini-2026-03-17\n"
+            "批量: /afdian_addmodels 1 模型一 模型二 模型三\n\n"
+            "等级: 0 = 公开模型, 1 = 赞助方案1, 2 = 赞助方案2\n\n"
             "💡 若模型已在其他等级中，将自动移动到目标等级"
         )
         return
 
-    target_level = parts[1]
-    model_names = [m.strip() for m in parts[2:] if m.strip()]
+    target_level = clean_arg(parts[1])
+    model_names = [clean_arg(m) for m in parts[2:] if m.strip()]
 
     if target_level not in ("0", "1", "2"):
         yield event.plain_result("方案等级只能是 0(公开), 1 或 2")
@@ -209,12 +209,12 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
             lines.append("\n**不可达模型:**")
             for model, loc, _, reason in unreachable:
                 lines.append(f"  ❌ `{model}` ({loc}) — {reason}")
-        lines.append("\n💡 使用 `/afdian_delmodels <模型名...>` 批量移除（空格分隔）")
+        lines.append("\n💡 使用 /afdian_delmodels 模型名... 批量移除（空格分隔）")
         yield event.plain_result("\n".join(lines))
         return
 
     # 有参数: 批量删除
-    model_names_del = [m.strip() for m in parts[1:] if m.strip()]
+    model_names_del = [clean_arg(m) for m in parts[1:] if m.strip()]
     if not model_names_del:
         yield event.plain_result("模型名不能为空")
         return

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from .services import Services
 from .storage import StorageManager
-from .utils import str_to_list
+from .utils import clean_arg, str_to_list
 
 
 async def cmd_help(svc: Services, event):
@@ -17,30 +17,30 @@ async def cmd_help(svc: Services, event):
 • Lv2（二级赞助）: 绑定二级赞助订单后获得，可使用 Lv2 + Lv1 + Lv0 模型
 
 **📌 用户指令:**
-• /afdian_bind <订单号> - 绑定爱发电订单号
+• /afdian_bind 订单号 - 绑定爱发电订单号（例：/afdian_bind 2025061612345678）
 • /afdian_models - 查看当前可用模型列表（含编号）
-• /afdian_switch <模型名/编号> - 切换当前使用的模型
+• /afdian_switch 模型名或编号 - 切换当前使用的模型（例：/afdian_switch one_1）
 • /afdian_status - 查看赞助权限状态
 • /afdian_help - 显示本帮助信息
 
 **🔧 管理员指令:**
-• /afdian_reset <订单号> - 释放指定订单绑定
+• /afdian_reset 订单号 - 释放指定订单绑定
 • /afdian_reset_all YES - ⚠️ 一键清除所有缓存数据
-• /afdian_query <订单号> - 查询指定订单详情
-• /afdian_addmodels <等级> <模型...> - 批量添加/移动模型
+• /afdian_query 订单号 - 查询指定订单详情
+• /afdian_addmodels 等级 模型... - 批量添加/移动模型（例：/afdian_addmodels 1 openai/gpt-5）
 • /afdian_delmodels [模型...] - 批量移除/连通性测试
-• /afdian_addplan <plan_id> <天数> <前缀> - 添加赞助方案
-• /afdian_delplan <plan_id> - 删除赞助方案
+• /afdian_addplan plan_id 天数 前缀 - 添加赞助方案（例：/afdian_addplan p_abc 30 gpt）
+• /afdian_delplan plan_id - 删除赞助方案
 • /afdian_getconfig - 查看插件配置
-• /afdian_setconfig <key> <value> - 设置配置项
+• /afdian_setconfig key value - 设置配置项
 • /afdian_migrateconfig - 从 AstrBot 配置迁移
 
 **📋 使用流程:**
 1. 未绑定用户可直接使用 /afdian_models 查看公开模型
 2. 在爱发电赞助并获取订单号
-3. 使用 /afdian_bind <订单号> 绑定升级身份
+3. 使用 /afdian_bind 订单号 绑定升级身份
 4. 使用 /afdian_models 查看可用模型
-5. 使用 /afdian_switch <模型名/编号> 切换模型""")
+5. 使用 /afdian_switch 模型名或编号 切换模型""")
 
 
 async def cmd_bind(svc: Services, event):
@@ -56,10 +56,10 @@ async def cmd_bind(svc: Services, event):
 
     parts = event.message_str.strip().split()
     if len(parts) < 2:
-        yield event.plain_result("用法: /afdian_bind <订单号>")
+        yield event.plain_result("用法: /afdian_bind 订单号（例：/afdian_bind 2025061612345678）")
         return
 
-    order_no = parts[1]
+    order_no = clean_arg(parts[1])
     resp = await api.query_order(page=1)
     if resp.get("ec") != 200:
         yield event.plain_result("查询订单失败，请稍后重试")
@@ -149,7 +149,7 @@ async def cmd_models(svc: Services, event):
         mid = model_id_map.get(m, "?")
         marker = " ▶ 当前" if m == current else ""
         lines.append(f"  `[{mid}]` {m}{marker}")
-    lines.append("\n💡 使用 /afdian_switch <模型名/编号> 切换模型")
+    lines.append("\n💡 使用 /afdian_switch 模型名或编号 切换模型（例：/afdian_switch one_1）")
     yield event.plain_result("\n".join(lines))
 
 
@@ -157,10 +157,10 @@ async def cmd_switch(svc: Services, event, is_admin_fn):
     """切换模型。"""
     parts = event.message_str.strip().split(maxsplit=1)
     if len(parts) < 2:
-        yield event.plain_result("用法: /afdian_switch <模型名/编号>\n例如: /afdian_switch openai/gpt-5.4-mini-2026-03-17\n或: /afdian_switch zero_1")
+        yield event.plain_result("用法: /afdian_switch 模型名或编号\n例如: /afdian_switch openai/gpt-5.4-mini-2026-03-17\n或: /afdian_switch zero_1")
         return
 
-    model_input = parts[1].strip()
+    model_input = clean_arg(parts[1])
     umo = event.unified_msg_origin
     umo_data = svc.storage.get_umo_data(umo)
     group_id = event.get_group_id()
