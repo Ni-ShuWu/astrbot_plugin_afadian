@@ -1,4 +1,10 @@
-"""用户管理 —— 绑定、权限检查、模型列表。"""
+"""用户管理 —— 绑定、权限检查、模型列表。
+
+关键修复:
+- bind_user 使用 storage._lock 保护整个绑定流程的原子性
+- 修复 used_orders 浅拷贝问题（确保独立列表）
+- 迁移旧绑定时使用 storage 接口而非直接操作 sp
+"""
 
 from datetime import datetime, timedelta
 
@@ -20,70 +26,95 @@ class UserManager:
     async def bind_user(
         self, user_id: str, plan_id: str, plan: dict, umo, create_time: int = 0, order_no: str = ""
     ) -> dict:
-        """绑定用户到赞助方案，支持累加。"""
+        """绑定用户到赞助方案，支持累加。
+
+        整个绑定流程在 storage._lock 保护下执行，确保:
+        1. 迁移旧绑定不会被并发操作覆盖
+        2. 多步写操作（set_umo_data + register_umo + set_user_mapping）的原子性
+        3. used_orders 列表独立拷贝，防止浅拷贝共享引用
+        """
         days = plan["days"]
         prefixes = plan["prefixes"]
         level = plan.get("level", "1")
-        existing = self._storage.get_user_mapping(user_id)
-        umo_key = self._storage._umo_key(umo)
 
-        # 迁移旧绑定
-        if existing and existing != umo_key:
-            old_data = sp.get(existing, {}) or {}
-            if old_data:
-                old_data = StorageManager.migrate_umo_data(old_data, self._wire)
-                new_data = sp.get(umo_key, {}) or {}
-                if not new_data:
-                    new_data = dict(old_data)
-                self._storage.set_umo_data(umo, new_data)
-                self._storage.remove_umo_by_key(existing)
-                self._storage.unregister_umo(existing)
+        async with self._storage._lock:
+            existing = self._storage.get_user_mapping(user_id)
+            umo_key = self._storage._umo_key(umo)
 
-        umo_data = self._storage.get_umo_data(umo)
-        order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
+            # 迁移旧绑定
+            if existing and existing != umo_key:
+                old_data = self._storage.get_umo_data_by_key(existing)
+                if old_data:
+                    old_data = StorageManager.migrate_umo_data(old_data, self._wire)
+                    new_data = self._storage.get_umo_data(umo)
+                    if not new_data:
+                        new_data = dict(old_data)
+                    self._storage.set_umo_data(umo, new_data)
+                    self._storage.remove_umo_by_key(existing)
+                    # 直接操作 sp（已在锁内）
+                    active = sp.get("afdian_model:active_umos", [])
+                    if existing in active:
+                        active.remove(existing)
+                        sp.put("afdian_model:active_umos", active)
 
-        if umo_data:
-            umo_data = StorageManager.migrate_umo_data(umo_data, self._wire)
-            used_orders = umo_data.get("used_orders", [])
-            if order_no and order_no in used_orders:
-                return umo_data
+            umo_data = self._storage.get_umo_data(umo)
+            order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
 
-            if level == "2":
-                umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
-                umo_data["active_level"] = "2"
-            else:
-                umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
-                if umo_data.get("active_level", "0") != "2":
-                    umo_data["active_level"] = "1"
+            if umo_data:
+                umo_data = StorageManager.migrate_umo_data(umo_data, self._wire)
+                # 深拷贝 used_orders，防止修改 sp 内部引用
+                used_orders = list(umo_data.get("used_orders", []))
+                if order_no and order_no in used_orders:
+                    return umo_data
 
-            umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
-            existing_pf = str_to_list(umo_data.get("prefixes", ""))
-            combined = list(set(existing_pf + prefixes))
-            umo_data["prefixes"] = list_to_str(combined)
-            umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime("%Y-%m-%d %H:%M:%S")
-            umo_data["level"] = "2" if umo_data.get("l2_days", 0) > 0 else "1"
-            if order_no:
-                used_orders.append(order_no)
+                if level == "2":
+                    umo_data["l2_days"] = umo_data.get("l2_days", 0) + days
+                    umo_data["active_level"] = "2"
+                else:
+                    umo_data["l1_days"] = umo_data.get("l1_days", 0) + days
+                    if umo_data.get("active_level", "0") != "2":
+                        umo_data["active_level"] = "1"
+
+                umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
+                existing_pf = str_to_list(umo_data.get("prefixes", ""))
+                combined = list(set(existing_pf + prefixes))
+                umo_data["prefixes"] = list_to_str(combined)
+                umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime("%Y-%m-%d %H:%M:%S")
+                umo_data["level"] = "2" if umo_data.get("l2_days", 0) > 0 else "1"
+                if order_no:
+                    used_orders.append(order_no)
                 umo_data["used_orders"] = used_orders
-        else:
-            umo_data = {
-                "remaining_days": days,
-                "prefixes": list_to_str(prefixes),
-                "order_time": order_time,
-                "expire_time": (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"),
-                "plan_id": plan_id,
-                "used_orders": [order_no] if order_no else [],
-                "level": level,
-                "active_level": level,
-                "l1_days": days if level == "1" else 0,
-                "l2_days": days if level == "2" else 0,
-            }
+            else:
+                umo_data = {
+                    "remaining_days": days,
+                    "prefixes": list_to_str(prefixes),
+                    "order_time": order_time,
+                    "expire_time": (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"),
+                    "plan_id": plan_id,
+                    "used_orders": [order_no] if order_no else [],
+                    "level": level,
+                    "active_level": level,
+                    "l1_days": days if level == "1" else 0,
+                    "l2_days": days if level == "2" else 0,
+                }
 
-        umo_data["order_time"] = order_time
-        umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime("%Y-%m-%d %H:%M:%S")
-        self._storage.set_umo_data(umo, umo_data)
-        self._storage.register_umo(umo_key)
-        self._storage.set_user_mapping(user_id, umo_key)
+            umo_data["order_time"] = order_time
+            umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime("%Y-%m-%d %H:%M:%S")
+            self._storage.set_umo_data(umo, umo_data)
+
+            # 注册到 active_umos（已在锁内，直接操作 sp）
+            active = sp.get("afdian_model:active_umos", [])
+            if umo_key not in active:
+                active.append(umo_key)
+                sp.put("afdian_model:active_umos", active)
+
+            # 设置用户映射（已在锁内，直接操作 sp）
+            sp.put(f"afdian_model:by_afdian:{user_id}", umo_key)
+            idx = sp.get("afdian_model:user_index", [])
+            if user_id not in idx:
+                idx.append(user_id)
+                sp.put("afdian_model:user_index", idx)
+
         return umo_data
 
     def get_model_list(self, config_fn) -> list[str]:

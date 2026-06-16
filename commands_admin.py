@@ -1,4 +1,10 @@
-"""核心管理指令 —— reset / reset_all / query / getconfig / setconfig / migrateconfig。"""
+"""核心管理指令 —— reset / reset_all / query / getconfig / setconfig / migrateconfig。
+
+关键修复:
+- cmd_reset 使用 storage._lock 保护 read-modify-write 原子性
+- cmd_reset_all 适配 async full_reset
+- 修复 used_orders 浅拷贝问题
+"""
 
 import os
 
@@ -71,44 +77,49 @@ async def cmd_reset(svc: Services, event, is_admin_fn):
     umo_key = svc.storage.get_user_mapping(user_id)
     deducted_msg = ""
     if umo_key:
-        umo_data = svc.sp.get(umo_key, {}) or {}
-        if umo_data:
-            umo_data = dict(umo_data)
-            umo_data = StorageManager.migrate_umo_data(umo_data, svc.wire)
+        async with svc.storage._lock:
+            umo_data = svc.storage.get_umo_data_by_key(umo_key)
+            if umo_data:
+                umo_data = StorageManager.migrate_umo_data(umo_data, svc.wire)
 
-            used_orders = umo_data.get("used_orders", [])
-            if order_no in used_orders:
-                used_orders.remove(order_no)
+                # 深拷贝 used_orders，防止修改 sp 内部引用
+                used_orders = list(umo_data.get("used_orders", []))
+                if order_no in used_orders:
+                    used_orders.remove(order_no)
                 umo_data["used_orders"] = used_orders
 
-            if plan_days > 0:
-                if plan_level == "2":
-                    old = umo_data.get("l2_days", 0)
-                    umo_data["l2_days"] = max(0, old - plan_days)
-                    deducted_msg = f"，已扣减 Lv2 {old - umo_data['l2_days']} 天"
-                    if umo_data["l2_days"] <= 0 and umo_data.get("l1_days", 0) > 0:
-                        umo_data["active_level"] = "1"
-                        deducted_msg += "，已切换至 Lv1"
+                if plan_days > 0:
+                    if plan_level == "2":
+                        old = umo_data.get("l2_days", 0)
+                        umo_data["l2_days"] = max(0, old - plan_days)
+                        deducted_msg = f"，已扣减 Lv2 {old - umo_data['l2_days']} 天"
+                        if umo_data["l2_days"] <= 0 and umo_data.get("l1_days", 0) > 0:
+                            umo_data["active_level"] = "1"
+                            deducted_msg += "，已切换至 Lv1"
+                    else:
+                        old = umo_data.get("l1_days", 0)
+                        umo_data["l1_days"] = max(0, old - plan_days)
+                        deducted_msg = f"，已扣减 Lv1 {old - umo_data['l1_days']} 天"
+
+                umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
+
+                if umo_data["remaining_days"] <= 0 or not used_orders:
+                    umo_data["active_level"] = "0"
+                    umo_data["level"] = "0"
+                    umo_data["l1_days"] = 0
+                    umo_data["l2_days"] = 0
+                    umo_data["remaining_days"] = 0
+                    svc.storage.set_umo_data_by_key(umo_key, umo_data)
+                    # 直接操作 sp（已在锁内）
+                    active = svc.sp.get("afdian_model:active_umos", [])
+                    if umo_key in active:
+                        active.remove(umo_key)
+                        svc.sp.put("afdian_model:active_umos", active)
+                    deducted_msg += "，余额归零已降为 Lv0"
                 else:
-                    old = umo_data.get("l1_days", 0)
-                    umo_data["l1_days"] = max(0, old - plan_days)
-                    deducted_msg = f"，已扣减 Lv1 {old - umo_data['l1_days']} 天"
+                    svc.storage.set_umo_data_by_key(umo_key, umo_data)
 
-            umo_data["remaining_days"] = umo_data.get("l1_days", 0) + umo_data.get("l2_days", 0)
-
-            if umo_data["remaining_days"] <= 0 or not used_orders:
-                umo_data["active_level"] = "0"
-                umo_data["level"] = "0"
-                umo_data["l1_days"] = 0
-                umo_data["l2_days"] = 0
-                umo_data["remaining_days"] = 0
-                svc.storage.set_umo_data_by_key(umo_key, umo_data)
-                svc.storage.unregister_umo(umo_key)
-                deducted_msg += "，余额归零已降为 Lv0"
-            else:
-                svc.storage.set_umo_data_by_key(umo_key, umo_data)
-
-    svc.storage.unmark_order_processed(order_no)
+    await svc.storage.unmark_order_processed(order_no)
     log_msg(svc.wire, f"订单重置成功: order={order_no} user={user_id}{deducted_msg}")
     yield event.plain_result(f"订单 {order_no} 已重置{deducted_msg}，可以重新绑定")
 
@@ -134,7 +145,7 @@ async def cmd_reset_all(svc: Services, event, is_admin_fn):
         )
         return
 
-    stats = svc.storage.full_reset()
+    stats = await svc.storage.full_reset()
     log_msg(svc.wire, f"一键重置完成: {stats}")
     yield event.plain_result(
         f"✅ **一键重置完成！**\n\n"
