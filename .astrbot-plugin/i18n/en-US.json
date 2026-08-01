@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "display_name": "Afdian Model Subscription",
+    "short_desc": "Self-service LLM model switching powered by Afdian sponsorship",
+    "desc": "Order binding, model switching, permission management, and automatic expiry."
+  },
+  "config": {
+    "afdian_api_base": {
+      "description": "Afdian API base URL",
+      "hint": "Reverse-proxy/intermediate address; default is the official API"
+    },
+    "afdian_user_id": {
+      "description": "Afdian user ID",
+      "hint": "Get it from the Afdian developer dashboard"
+    },
+    "afdian_token": {
+      "description": "Afdian API token",
+      "hint": "Get it from the Afdian developer dashboard; keep it secret"
+    },
+    "model_list": {
+      "description": "Global available model names (comma separated)",
+      "hint": "e.g. gpt-4o,claude-3.5-sonnet"
+    },
+    "group_admins": {
+      "description": "Static group admin list",
+      "hint": "Format: {\"123456\": [\"10001\"]}; used when platform group roles are unavailable"
+    },
+    "poll_interval_hours": {
+      "description": "Afdian order polling interval (hours)",
+      "hint": "Interval for polling the Afdian API for new orders; default 1 hour"
+    }
+  }
+}

@@ -1,11 +1,10 @@
 """模型管理指令 —— addmodels / delmodels。"""
 
 import asyncio
-from datetime import datetime
 
 from .services import Services
-from .storage import SP_UMO_PREFIX, StorageManager
-from .utils import LEVEL_ID_PREFIX, log_msg, model_names_from_config, str_to_list
+from .storage import SP_UMO_PREFIX, StorageManager, sp_get
+from .utils import LEVEL_ID_PREFIX, log_msg, str_to_list
 
 
 async def cmd_addmodels(svc: Services, event, is_admin_fn):
@@ -65,50 +64,28 @@ async def cmd_addmodels(svc: Services, event, is_admin_fn):
         yield event.plain_result(f"所有模型已在{LEVEL_NAMES[target_level]}中: {', '.join(model_names)}")
         return
 
-    from .storage import StorageManager as _SM
-    cfg["model_list"] = _SM._list_to_str(model_list)
-    cfg["models_1"] = _SM._list_to_str(models_1)
-    cfg["models_2"] = _SM._list_to_str(models_2)
-    svc.config_manager.save_plugin_config(cfg)
-    svc.plan_manager.sync_plan_mapping()
+    cfg["model_list"] = StorageManager._list_to_str(model_list)
+    cfg["models_1"] = StorageManager._list_to_str(models_1)
+    cfg["models_2"] = StorageManager._list_to_str(models_2)
+    try:
+        svc.save_config()
+        await svc.plan_manager.sync_plan_mapping()
+    except Exception as e:
+        log_msg(svc.wire, f"保存模型配置失败: {e}", "error")
+        yield event.plain_result("保存配置失败，请稍后重试（已记录日志）")
+        return
 
     all_moved = {mn for mn, _, _ in moved}
     all_affected = all_moved | set(added_new)
 
-    updated_users = 0
-    reset_users = 0
-    active_umos = svc.storage.get_active_umos()
-
-    for umo_key in active_umos:
-        umo_data = svc.sp.get(umo_key, {}) or {}
-        if not umo_data:
-            continue
-
-        user_level = umo_data.get("active_level", umo_data.get("level", "1"))
-        if user_level == "2":
-            accessible = set(models_2 + models_1 + model_list)
-        elif user_level == "1":
-            accessible = set(models_1 + model_list)
-        else:
-            accessible = set(model_list)
-
-        prefix_set = set(str_to_list(umo_data.get("prefixes", "")))
-        changed = False
-        for mn in all_affected:
-            if mn in accessible and mn not in prefix_set:
-                prefix_set.add(mn)
-                changed = True
-            elif mn not in accessible and mn in prefix_set:
-                prefix_set.discard(mn)
-                changed = True
-                if svc.sp.get(umo_key + ":current", "") == mn:
-                    svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
-                    reset_users += 1
-
-        if changed:
-            umo_data["prefixes"] = _SM._list_to_str(sorted(prefix_set))
-            svc.storage.set_umo_data_by_key(umo_key, umo_data)
-            updated_users += 1
+    try:
+        updated_users, reset_users = await _hot_sync_users(
+            svc, all_affected, models_2, models_1, model_list
+        )
+    except Exception as e:
+        log_msg(svc.wire, f"热同步用户失败: {e}", "error")
+        yield event.plain_result("配置已保存，但用户热同步失败，请稍后重试（已记录日志）")
+        return
 
     for mn, from_levels, _ in moved:
         from_names = ", ".join(LEVEL_NAMES[l] for l in from_levels)
@@ -168,32 +145,38 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
         from astrbot.core.provider.entities import ProviderType
 
         current_model_key = f"{SP_UMO_PREFIX}{umo}:current"
-        original_model = svc.sp.get(current_model_key, "")
+        original_model = await sp_get(current_model_key, "")
 
         results: list[tuple[str, str, bool, str]] = []
-        for model_name, locations in sorted(all_models.items()):
-            loc_tags = "+".join(sorted(locations))
-            try:
-                await context.provider_manager.set_provider(model_name, ProviderType.CHAT_COMPLETION, umo)
-                provider_id = await context.get_current_chat_provider_id(umo)
-                if not provider_id:
-                    results.append((model_name, loc_tags, False, "无匹配的提供商"))
-                    continue
-                resp = await asyncio.wait_for(
-                    context.llm_generate(chat_provider_id=provider_id, prompt="ping"),
-                    timeout=15.0,
-                )
-                results.append((model_name, loc_tags, True, "OK"))
-            except asyncio.TimeoutError:
-                results.append((model_name, loc_tags, False, "超时(15s)"))
-            except Exception as e:
-                results.append((model_name, loc_tags, False, str(e)[:100]))
-
-        if original_model and original_model != StorageManager._default_model():
-            try:
-                await context.provider_manager.set_provider(original_model, ProviderType.CHAT_COMPLETION, umo)
-            except Exception:
-                pass
+        try:
+            for model_name, locations in sorted(all_models.items()):
+                loc_tags = "+".join(sorted(locations))
+                try:
+                    await context.provider_manager.set_provider(
+                        model_name, ProviderType.CHAT_COMPLETION, umo
+                    )
+                    provider_id = await context.get_current_chat_provider_id(umo)
+                    if not provider_id:
+                        results.append((model_name, loc_tags, False, "无匹配的提供商"))
+                        continue
+                    resp = await asyncio.wait_for(
+                        context.llm_generate(chat_provider_id=provider_id, prompt="ping"),
+                        timeout=15.0,
+                    )
+                    results.append((model_name, loc_tags, True, "OK"))
+                except asyncio.TimeoutError:
+                    results.append((model_name, loc_tags, False, "超时(15s)"))
+                except Exception as e:
+                    results.append((model_name, loc_tags, False, str(e)[:100]))
+        finally:
+            # 无论测试结果如何，恢复用户原来的模型
+            if original_model and original_model != await StorageManager._default_model():
+                try:
+                    await context.provider_manager.set_provider(
+                        original_model, ProviderType.CHAT_COMPLETION, umo
+                    )
+                except Exception as e:
+                    log_msg(svc.wire, f"恢复原模型失败: {original_model} - {e}", "warning")
 
         reachable = [r for r in results if r[2]]
         unreachable = [r for r in results if not r[2]]
@@ -245,17 +228,21 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
         yield event.plain_result(f"指定模型均不在任何层级中: {', '.join(model_names_del)}")
         return
 
-    from .storage import StorageManager as _SM
-    cfg["model_list"] = _SM._list_to_str(model_list)
-    cfg["models_1"] = _SM._list_to_str(models_1)
-    cfg["models_2"] = _SM._list_to_str(models_2)
-    svc.config_manager.save_plugin_config(cfg)
-    svc.plan_manager.sync_plan_mapping()
+    cfg["model_list"] = StorageManager._list_to_str(model_list)
+    cfg["models_1"] = StorageManager._list_to_str(models_1)
+    cfg["models_2"] = StorageManager._list_to_str(models_2)
+    try:
+        svc.save_config()
+        await svc.plan_manager.sync_plan_mapping()
+    except Exception as e:
+        log_msg(svc.wire, f"保存模型配置失败: {e}", "error")
+        yield event.plain_result("保存配置失败，请稍后重试（已记录日志）")
+        return
 
     user_updates = 0
-    active_umos = svc.storage.get_active_umos()
+    active_umos = await svc.storage.get_active_umos()
     for umo_key in active_umos:
-        umo_data = svc.sp.get(umo_key, {}) or {}
+        umo_data = await sp_get(umo_key, {}) or {}
         if not umo_data:
             continue
         prefixes = str_to_list(umo_data.get("prefixes", ""))
@@ -264,11 +251,11 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
             if mn in prefixes:
                 prefixes.remove(mn)
                 updated = True
-            if svc.sp.get(umo_key + ":current", "") == mn:
-                svc.storage.set_current_model_by_key(umo_key, StorageManager._default_model())
+            if await sp_get(umo_key + ":current", "") == mn:
+                await svc.storage.set_current_model_by_key(umo_key, await StorageManager._default_model())
         if updated:
-            umo_data["prefixes"] = _SM._list_to_str(prefixes)
-            svc.storage.set_umo_data_by_key(umo_key, umo_data)
+            umo_data["prefixes"] = StorageManager._list_to_str(prefixes)
+            await svc.storage.set_umo_data_by_key(umo_key, umo_data)
             user_updates += 1
 
     for mn, removed in per_model.items():
@@ -283,3 +270,49 @@ async def cmd_delmodels(svc: Services, event, is_admin_fn):
     if not_found:
         msg += f"\n未找到(已跳过): {', '.join(not_found)}"
     yield event.plain_result(msg)
+
+
+async def _hot_sync_users(
+    svc: Services,
+    all_affected: set[str],
+    models_2: list[str],
+    models_1: list[str],
+    model_list: list[str],
+) -> tuple[int, int]:
+    """热同步所有活跃用户的模型前缀。返回 (更新用户数, 重置当前模型数)。"""
+    updated_users = 0
+    reset_users = 0
+    active_umos = await svc.storage.get_active_umos()
+
+    for umo_key in active_umos:
+        umo_data = await sp_get(umo_key, {}) or {}
+        if not umo_data:
+            continue
+
+        user_level = umo_data.get("active_level", umo_data.get("level", "1"))
+        if user_level == "2":
+            accessible = set(models_2 + models_1 + model_list)
+        elif user_level == "1":
+            accessible = set(models_1 + model_list)
+        else:
+            accessible = set(model_list)
+
+        prefix_set = set(str_to_list(umo_data.get("prefixes", "")))
+        changed = False
+        for mn in all_affected:
+            if mn in accessible and mn not in prefix_set:
+                prefix_set.add(mn)
+                changed = True
+            elif mn not in accessible and mn in prefix_set:
+                prefix_set.discard(mn)
+                changed = True
+                if await sp_get(umo_key + ":current", "") == mn:
+                    await svc.storage.set_current_model_by_key(umo_key, await StorageManager._default_model())
+                    reset_users += 1
+
+        if changed:
+            umo_data["prefixes"] = StorageManager._list_to_str(sorted(prefix_set))
+            await svc.storage.set_umo_data_by_key(umo_key, umo_data)
+            updated_users += 1
+
+    return updated_users, reset_users

@@ -2,10 +2,8 @@
 
 from datetime import datetime, timedelta
 
-from astrbot.core import sp
-
 from .plan_manager import PlanManager
-from .storage import StorageManager
+from .storage import StorageManager, sp_get
 from .utils import list_to_str, log_msg, model_names_from_config, str_to_list
 
 
@@ -24,22 +22,22 @@ class UserManager:
         days = plan["days"]
         prefixes = plan["prefixes"]
         level = plan.get("level", "1")
-        existing = self._storage.get_user_mapping(user_id)
+        existing = await self._storage.get_user_mapping(user_id)
         umo_key = self._storage._umo_key(umo)
 
-        # 迁移旧绑定
+        # 迁移旧绑定（同一用户换了会话/群）
         if existing and existing != umo_key:
-            old_data = sp.get(existing, {}) or {}
+            old_data = await sp_get(existing, {}) or {}
             if old_data:
                 old_data = StorageManager.migrate_umo_data(old_data, self._wire)
-                new_data = sp.get(umo_key, {}) or {}
+                new_data = await sp_get(umo_key, {}) or {}
                 if not new_data:
                     new_data = dict(old_data)
-                self._storage.set_umo_data(umo, new_data)
-                self._storage.remove_umo_by_key(existing)
-                self._storage.unregister_umo(existing)
+                await self._storage.set_umo_data(umo, new_data)
+                await self._storage.remove_umo_by_key(existing)
+                await self._storage.unregister_umo(existing)
 
-        umo_data = self._storage.get_umo_data(umo)
+        umo_data = await self._storage.get_umo_data(umo)
         order_time = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S") if create_time else "未知"
 
         if umo_data:
@@ -81,16 +79,16 @@ class UserManager:
 
         umo_data["order_time"] = order_time
         umo_data["expire_time"] = (datetime.now() + timedelta(days=umo_data["remaining_days"])).strftime("%Y-%m-%d %H:%M:%S")
-        self._storage.set_umo_data(umo, umo_data)
-        self._storage.register_umo(umo_key)
-        self._storage.set_user_mapping(user_id, umo_key)
+        await self._storage.set_umo_data(umo, umo_data)
+        await self._storage.register_umo(umo_key)
+        await self._storage.set_user_mapping(user_id, umo_key)
         return umo_data
 
     def get_model_list(self, config_fn) -> list[str]:
         return model_names_from_config(config_fn().get("model_list", ""))
 
     def has_model_permission(self, umo_data: dict | None, model_name: str) -> tuple[bool, list[str]]:
-        """检查用户是否有模型权限。高级用户可用低级模型：Lv2 > Lv1 > Lv0。"""
+        """检查用户是否有模型权限（单向前缀匹配：模型名等于或长于前缀）。"""
         if not umo_data:
             return False, []
 
@@ -98,29 +96,21 @@ class UserManager:
         if isinstance(user_prefixes, str):
             user_prefixes = str_to_list(user_prefixes)
 
-        for p in user_prefixes:
-            if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                return True, user_prefixes
+        def _hit(prefixes: list[str]) -> bool:
+            return any(model_name == p or model_name.startswith(p) for p in prefixes)
+
+        if _hit(user_prefixes):
+            return True, user_prefixes
 
         user_level = umo_data.get("active_level", umo_data.get("level", "1"))
-
-        if user_level == "2":
-            level_1_pf = self._get_level_prefixes("1")
-            for p in level_1_pf:
-                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                    return True, list(set(user_prefixes + level_1_pf))
-
         if user_level in ("1", "2"):
             level_0_pf = self._get_level_prefixes("0")
-            for p in level_0_pf:
-                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                    return True, list(set(user_prefixes + level_0_pf))
-
-        if user_level == "0":
-            level_0_pf = self._get_level_prefixes("0")
-            for p in level_0_pf:
-                if model_name.startswith(p) or p.startswith(model_name) or model_name == p:
-                    return True, list(set(user_prefixes + level_0_pf))
+            if _hit(level_0_pf):
+                return True, list(set(user_prefixes + level_0_pf))
+        if user_level == "2":
+            level_1_pf = self._get_level_prefixes("1")
+            if _hit(level_1_pf):
+                return True, list(set(user_prefixes + level_1_pf))
 
         return False, user_prefixes
 
