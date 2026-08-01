@@ -60,6 +60,14 @@ def model_names_from_config(raw: Any) -> list[str]:
     return []
 
 
+def mask_secret(value: Any) -> str:
+    """脱敏辅助：仅保留前 4 位与后 2 位，其余用 * 代替。"""
+    s = str(value or "")
+    if len(s) <= 8:
+        return "***"
+    return f"{s[:4]}***{s[-2:]}"
+
+
 # ── 日志 ──────────────────────────────────────────
 
 LogFn = Callable[[str, str], None]  # (msg, level)

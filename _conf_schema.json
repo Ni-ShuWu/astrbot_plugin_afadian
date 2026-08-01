@@ -56,5 +56,18 @@
         "type": "string",
         "hint": "用逗号分隔模型名，如: gpt-4o,claude-3.5-sonnet",
         "default": ""
+    },
+    "group_admins": {
+        "description": "静态群管理员列表（{群号: [QQ]}），平台群角色信息不可用时兜底",
+        "type": "dict",
+        "items": {},
+        "hint": "格式: {\"123456\": [\"10001\"]}，请在 WebUI 中编辑",
+        "default": {}
+    },
+    "poll_interval_hours": {
+        "description": "爱发电订单轮询间隔（小时）",
+        "type": "int",
+        "hint": "轮询 API 发现新订单的间隔，默认 1 小时",
+        "default": 1
     }
 }

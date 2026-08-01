@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "display_name": "爱发电模型订阅",
+    "short_desc": "基于爱发电赞助的 LLM 模型自助切换插件",
+    "desc": "支持订单绑定、模型切换、权限管理，到期自动收回权限。"
+  },
+  "config": {
+    "afdian_api_base": {
+      "description": "爱发电 API 地址",
+      "hint": "反代/中转地址，默认官方 API"
+    },
+    "afdian_user_id": {
+      "description": "爱发电用户 ID",
+      "hint": "在爱发电开发者后台获取"
+    },
+    "afdian_token": {
+      "description": "爱发电 API Token",
+      "hint": "在爱发电开发者后台获取，注意保密"
+    },
+    "model_list": {
+      "description": "全局可用模型名称列表（逗号分隔）",
+      "hint": "用逗号分隔模型名，如: gpt-4o,claude-3.5-sonnet"
+    },
+    "group_admins": {
+      "description": "静态群管理员列表",
+      "hint": "格式: {\"123456\": [\"10001\"]}，平台群角色信息不可用时兜底"
+    },
+    "poll_interval_hours": {
+      "description": "爱发电订单轮询间隔（小时）",
+      "hint": "轮询 API 发现新订单的间隔，默认 1 小时"
+    }
+  }
+}

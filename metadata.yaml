@@ -1,5 +1,5 @@
 name: "astrbot_plugin_afdian_model"
-version: "v2.5.4"
+version: "3.0.0"
 display_name: "爱发电模型订阅"
 description: "基于爱发电赞助的LLM模型自助切换插件 - 支持订单绑定/模型切换/权限管理"
 author: "N(Ni-ShuWu)&C(CLYAE[KeLai])"
@@ -9,7 +9,7 @@ repo: "https://github.com/kelai141/astrbot_plugin_afadian"
 tags: ["afdian", "model", "subscription", "llm", "sponsor"]
 
 # AstrBot 版本要求
-astrbot_version: ">=4.15.0"
+astrbot_version: ">=4.15,<5"
 
 # 声明支持平台
 support_platforms:
